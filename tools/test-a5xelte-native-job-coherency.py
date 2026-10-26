@@ -62,7 +62,7 @@ static void a5g3d_as1_write(vm_offset_t,unsigned r,unsigned v){
 template<class... T>static void a5g3d_as1_fault_snapshot(T...){ }
 template<class... T>static void IOLog(const char*,T...){ }
 static void IODelay(unsigned){ }
-static void a5g3d_poll_pause(unsigned*elapsed,unsigned){*elapsed+=10;}
+static void IOSleep(unsigned){ }
 static uint64_t mach_absolute_time(){static uint64_t n;return ++n;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 '''
@@ -95,7 +95,7 @@ int main(){
 }
 '''
 source = a.output / 'test.cpp'
-source.write_text(pre + actual + body)
+source.write_text(pre + '\n#include "'+str(a.kernel_source/'iokit/Kernel/arm/A5XELTEGPUPoll.h')+'"\n' + actual + body)
 binary = a.output / 'test'
 subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
                 '-fsanitize=address,undefined', str(source), '-o', str(binary)], check=True)

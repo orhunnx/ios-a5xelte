@@ -1,0 +1,104 @@
+--- a/iokit/Kernel/arm/A5XELTEGPUPoll.h
++++ b/iokit/Kernel/arm/A5XELTEGPUPoll.h
+@@ -1,11 +1,31 @@
+-/* Preserve the existing nominal delay budget; yield after a short spin. */
++/* Bound busy polling for short GPU work, then yield for long jobs.
++ * Timeout values are unchanged; measured pauses charge actual wakeup time.
++ * Measured wall time includes scheduler wakeup; it is not a GPU active-cycle measurement. */
+ #ifndef A5XELTE_GPU_POLL_H
+ #define A5XELTE_GPU_POLL_H
+-static inline void a5g3d_poll_pause(unsigned *elapsedUS,unsigned budgetUS)
++struct A5G3DPollStats {
++    uint64_t spinNS = 0, sleepNS = 0;
++    unsigned spins = 0, sleeps = 0;
++};
++static inline void a5g3d_poll_pause(unsigned *elapsedUS,unsigned budgetUS,
++    A5G3DPollStats *stats = nullptr,unsigned spinLimitUS = 2000)
+ {
+     if(*elapsedUS>=budgetUS)return;
+     unsigned remaining=budgetUS-*elapsedUS;
+-    if(*elapsedUS>=200 && remaining>=1000){IOSleep(1);*elapsedUS+=1000;}
+-    else {unsigned step=remaining<10?remaining:10;IODelay(step);*elapsedUS+=step;}
++    const bool sleep=*elapsedUS>=spinLimitUS && remaining>=1000;
++    const uint64_t begin=stats?mach_absolute_time():0;
++    const unsigned requested=sleep?1000:(remaining<10?remaining:10);
++    if(sleep)IOSleep(1);else IODelay(requested);
++    unsigned charged=requested;
++    if(stats){
++        uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time()-begin,&ns);
++        if(sleep){stats->sleepNS+=ns;++stats->sleeps;}
++        else {stats->spinNS+=ns;++stats->spins;}
++        /* A delayed scheduler wake must not inflate a nominal2s timeout
++         * into many seconds. Clamp before narrowing the measured duration. */
++        const uint64_t actualUS=ns/1000+(ns%1000!=0);
++        if(actualUS>charged)charged=actualUS>=remaining?remaining:(unsigned)actualUS;
++    }
++    *elapsedUS+=charged;
+ }
+ #endif
+--- a/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
+@@ -639,6 +639,7 @@
+     a5g3d_as1_write(gpu, slotBase + 0x60, 1u);
+     const uint64_t pollBegin=mach_absolute_time();
++    A5G3DPollStats pollStats;
+     uint32_t jobIRQ = 0, mmuIRQ = 0, gpuIRQ = 0;
+-    for (unsigned waitedUS = 0; waitedUS < pollBudget*10u;) {
++    for (unsigned waitedUS = 0;;) {
+         jobIRQ = a5g3d_as1_read(gpu, 0x1000);
+         mmuIRQ = a5g3d_as1_read(gpu, 0x2000);
+@@ -646,5 +647,7 @@
+         if ((jobIRQ & slotMask) || mmuIRQ || (gpuIRQ & 0x81u))
+             break;
+-        a5g3d_poll_pause(&waitedUS,pollBudget*10u);
++        /* Sample terminal/fault RAW once more after the last pause. */
++        if(waitedUS>=pollBudget*10u)break;
++        a5g3d_poll_pause(&waitedUS,pollBudget*10u,&pollStats);
+     }
+     if (completion) {
+@@ -723,7 +726,7 @@
+             absolutetime_to_nanoseconds(pollEnd-pollBegin,&pollNS);
+             absolutetime_to_nanoseconds(mach_absolute_time()-pollEnd,&flushNS);
+-            IOLog("A5XELTE G3D native cost: sample=%u slot=%u continuation=%u store_bytes=%u header_bytes=%u store_ns=%llu poll_ns=%llu reconcile_ns=%llu\n",
++            IOLog("A5XELTE G3D native cost: sample=%u slot=%u continuation=%u store_bytes=%u header_bytes=%u store_ns=%llu poll_ns=%llu reconcile_ns=%llu spin_ns=%llu sleep_ns=%llu sleeps=%u spins=%u spin_limit_us=2000\n",
+                 reports,slot,nativeContinuation?1u:0u,nativeContinuation?0u:kAS1JobBytes,flushedBytes,
+-                storeNS,pollNS,flushNS);
++                storeNS,pollNS,flushNS,pollStats.spinNS,pollStats.sleepNS,pollStats.sleeps,pollStats.spins);
+         }
+     }
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -439,4 +439,6 @@
++    const uint64_t pollBegin=mach_absolute_time();
++    A5G3DPollStats pollStats;
+     uint32_t jobIRQ = 0, mmuIRQ = 0, gpuIRQ = 0;
+-    for (unsigned waitedUS = 0; waitedUS < 200000;) {
++    for (unsigned waitedUS = 0;;) {
+         jobIRQ = a5g3d_read32(gpu, 0x1000);
+         mmuIRQ = a5g3d_read32(gpu, 0x2000);
+@@ -444,5 +446,7 @@
+         if ((jobIRQ & slotMask) || mmuIRQ || (gpuIRQ & 0x81))
+             break;
+-        a5g3d_poll_pause(&waitedUS,200000);
++        /* Sample terminal/fault RAW once more after the last pause. */
++        if(waitedUS>=200000)break;
++        a5g3d_poll_pause(&waitedUS,200000,&pollStats);
+     }
+     if (!((jobIRQ & slotMask) || mmuIRQ || (gpuIRQ & 0x81))) {
+@@ -481,4 +485,5 @@
+         a5g3d_queue_capture_fault(gpu, slot, fence, "terminal-fault",
+             jobIRQ, mmuIRQ, gpuIRQ, completion);
++    const uint64_t pollEnd=mach_absolute_time();
+     const bool headerFlushed = storage->performOperation(
+         kIOMemoryIncoherentIOFlush,
+@@ -520,4 +525,10 @@
+         fence, slot, jobIRQ, mmuIRQ, gpuIRQ, slotStatus, jsState, pending,
+         headerFlushed ? header[0] : 0xffffffffu, matchingWords, complete);
++    static unsigned pollReports=0;
++    if(++pollReports<=8 || !(pollReports&255) || !complete){
++        uint64_t wallNS=0;absolutetime_to_nanoseconds(pollEnd-pollBegin,&wallNS);
++        IOLog("A5XELTE G3D poll cost: sample=%u slot=%u complete=%u wall_ns=%llu spin_ns=%llu sleep_ns=%llu sleeps=%u spins=%u spin_limit_us=2000\n",
++            pollReports,slot,complete,wallNS,pollStats.spinNS,pollStats.sleepNS,pollStats.sleeps,pollStats.spins);
++    }
+     if (!complete) {
+         service->setProperty("A5G3DFenceResult", "fault-or-incomplete-pinned");

@@ -14,10 +14,12 @@ preamble=r'''
 #include <cassert>
 #include <cstdio>
 using vm_offset_t=uintptr_t;
-static unsigned elapsed, sleeps, spins, finishAt, faultAt;static bool hardwareStarted,busy;static uint32_t irq;
-static void IOSleep(unsigned ms){elapsed+=ms*1000;++sleeps;}
+static unsigned elapsed, sleeps, spins, finishAt, faultAt, sleepScale=1;static bool hardwareStarted,busy;static uint32_t irq;
+static void IOSleep(unsigned ms){elapsed+=ms*1000*sleepScale;++sleeps;}
 static void IODelay(unsigned us){elapsed+=us;++spins;}
-#define IOLog(...) ((void)0)
+template<class... T>static void IOLog(const char*,T...){ }
+static uint64_t mach_absolute_time(){return (uint64_t)elapsed*1000;}
+static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 static constexpr unsigned kAS1JobBytes=262144,kAS1JobVA=0x02000000;
 static constexpr int kIOMemoryIncoherentIOStore=1,kIOMemoryIncoherentIOFlush=2,kIOReturnSuccess=0;
 struct BO{alignas(16) uint8_t bytes[kAS1JobBytes]={};int performOperation(int,unsigned,unsigned){return 0;}void*getBytesNoCopy(){return bytes;}};
@@ -35,15 +37,27 @@ static void a5g3d_as1_fault_snapshot(vm_offset_t,unsigned,const char*){}
 '''
 body=r'''
 int main(){BO bo;A5G3DAS1Context c{&bo};uint64_t fence;bool started;A5G3DAS1Completion done;
- auto setup=[&](){elapsed=sleeps=spins=finishAt=faultAt=irq=0;hardwareStarted=busy=started=false;*reinterpret_cast<uint32_t*>(bo.bytes)=1;*reinterpret_cast<uint32_t*>(bo.bytes+16)=1;};
+ auto setup=[&](){elapsed=sleeps=spins=finishAt=faultAt=irq=0;hardwareStarted=busy=started=false;sleepScale=1;*reinterpret_cast<uint32_t*>(bo.bytes)=1;*reinterpret_cast<uint32_t*>(bo.bytes+16)=1;};
  setup();finishAt=50;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitCompleted);assert(!started&&hardwareStarted&&sleeps==0&&elapsed==50);
+ setup();finishAt=800;sleepScale=12;
+ assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitCompleted);
+ assert(elapsed==800&&!sleeps&&!started);
+ /* With an oversleeping scheduler, the old200us threshold waits12.2ms
+  * for this800us event. The new2ms threshold catches the real completion. */
+ setup();sleepScale=12;unsigned budget=0;A5G3DPollStats oldStats;
+ while(elapsed<800)a5g3d_poll_pause(&budget,200000,&oldStats,200);
+ assert(elapsed==12200&&oldStats.sleeps==1&&oldStats.sleepNS==12000000&&budget==elapsed);
+ /* A terminal IRQ exactly at the timeout boundary must win over timeout. */
+ setup();finishAt=2000;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16,200)==kAS1SubmitCompleted);assert(!started&&elapsed==2000);
+ setup();sleepScale=12;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16,200000)==kAS1SubmitTimeout);
+ assert(started&&elapsed>=2000000&&elapsed<2012000&&sleeps>0);
  setup();finishAt=5500;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitCompleted);assert(!started&&sleeps>0&&elapsed>=5500&&elapsed<6500);
  setup();assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16,200000)==kAS1SubmitTimeout);assert(started&&elapsed==2000000&&sleeps>0);
  setup();faultAt=2500;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitFault);assert(started&&sleeps>0);
  setup();busy=true;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitFault);assert(!started&&!hardwareStarted);
  setup();assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,3)==kAS1SubmitInvalid);assert(!started&&!hardwareStarted);
  setup();finishAt=5500;*reinterpret_cast<uint32_t*>(bo.bytes+16)=0;assert(a5g3d_as1_run_job(&c,0,1,0,&done,&fence,&started,16)==kAS1SubmitFault);assert(started);
- puts("PASS actual AS1 polling: short spin, long yield, nominal timeout, terminal fault, busy and invalid headers preserve uncertain ownership");}
+ puts("PASS actual AS1 polling: 2ms bounded spin, measured oversleep charging, final IRQ sample, long yield, timeout, terminal fault, busy and invalid headers preserve uncertain ownership");}
 '''
 run('poll',preamble+'\n#include "'+str(arm/'A5XELTEGPUPoll.h')+'"\n'+fn+body)
 s=(arm/'A5XELTEGPUUserClient.cpp').read_text();fn=s[s.index('bool\nA5XELTEGPUUserClient::posterAuthorized('):s.index('\nbool\nA5XELTEGPUUserClient::compilerAuthorized(')]
