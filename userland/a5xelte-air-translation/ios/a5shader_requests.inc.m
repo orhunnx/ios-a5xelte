@@ -1020,7 +1020,8 @@ static BOOL a5HasTerminalRequestStatus(NSString *key, NSDictionary *known, NSDic
         ![record[@"status"] isKindOfClass:NSString.class]||
         ![record[@"reason"] isKindOfClass:NSString.class])
         fail(@"untrusted existing request status identity");
-    if(![record[@"status"] isEqual:@"unsupported"]){
+    BOOL deferred=dynamicRequest&&[record[@"status"]isEqual:@"deferred"];
+    if(![record[@"status"] isEqual:@"unsupported"]&&!deferred){
         close(directory);
         if(dynamicRequest&&[record[@"status"] isEqual:@"failed"])
             a5DynamicFailure(dynamicRequest,record[@"reason"]);
@@ -1032,13 +1033,13 @@ static BOOL a5HasTerminalRequestStatus(NSString *key, NSDictionary *known, NSDic
         current.st_uid!=st.st_uid||current.st_mode!=st.st_mode||current.st_nlink!=1||
         current.st_size!=st.st_size||
         unlinkat(directory,name.fileSystemRepresentation,0)||fsync(directory)||close(directory))
-        fail(@"cannot retire unsupported 606 request status");
-    fprintf(stderr,"A5XELTE shader compiler: RETRY newly supported %s request=%s\n",
-        dynamicRequest?"dynamic-stage":"profile=606",key.UTF8String);
+        fail(@"cannot retire retryable request status");
+    fprintf(stderr,"A5XELTE shader compiler: RETRY reason=%s kind=%s request=%s\n",
+        deferred?"deferred":"newly-supported",dynamicRequest?"dynamic-stage":"profile=606",key.UTF8String);
     return NO;
 }
 
-static void a5HandleRequest(NSString *self, NSDictionary *request,
+static void a5HandleRequestAttempt(NSString *self, NSDictionary *request,
                             NSArray<NSDictionary *> *knownProfiles, NSString *key)
 {
     NSDictionary *known = nil;
@@ -1064,6 +1065,59 @@ static void a5HandleRequest(NSString *self, NSDictionary *request,
         return;
     }
     a5CompileKnown(self,request,known);
+}
+
+/* Canonical typed requests only; mere names/statuses never cause a yield.
+ * Keep the same64-leaf lane quota and a global256-leaf/64-user scan bound. */
+static NSSet<NSString *> *a5RunnableFunctionKeys(void)
+{
+    NSMutableSet *keys=[NSMutableSet set];
+    if(!activeDynamicRequest||!activeRequestKey)return keys;
+    int root=open(requestRoot.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if(root<0)return keys;
+    struct stat st;
+    if(fstat(root,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=geteuid()||(st.st_mode&07777)!=01777){close(root);return keys;}
+    DIR *users=fdopendir(root);if(!users){close(root);return keys;}
+    unsigned usersSeen=0,remaining=256;struct dirent *user;
+    while(remaining&&usersSeen<64&&(user=readdir(users))){
+        NSString *name=[NSString stringWithUTF8String:user->d_name];
+        if(!name.length||[name rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location!=NSNotFound)continue;
+        unsigned long long n=strtoull(user->d_name,NULL,10);if(n>UINT32_MAX)continue;usersSeen++;
+        uid_t uid=(uid_t)n;int lane=A5MaliOpenShaderLane(root,uid,1,0);if(lane<0)continue;
+        DIR *files=fdopendir(lane);if(!files){close(lane);continue;}
+        unsigned count=0;struct dirent *entry;
+        while(remaining&&count<64&&(entry=readdir(files))){
+            NSString *leaf=[NSString stringWithUTF8String:entry->d_name];
+            if(leaf.length!=77||![leaf hasSuffix:@".request.json"])continue;
+            NSString *key=[leaf substringToIndex:64];if(!a5HexDigest(key))continue;
+            count++;remaining--;if([key isEqual:activeRequestKey])continue;
+            if([NSFileManager.defaultManager fileExistsAtPath:[publishedRoot stringByAppendingPathComponent:key]]||
+               [NSFileManager.defaultManager fileExistsAtPath:[[cacheRoot stringByAppendingPathComponent:@"request-status"]stringByAppendingPathComponent:[key stringByAppendingString:@".json"]]])continue;
+            NSData *bytes=a5ReadRequest(lane,entry->d_name,uid);
+            NSDictionary *r=bytes?[NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL]:nil;
+            if(![r isKindOfClass:NSDictionary.class]||![r[@"request_id"]isEqual:key]||![r[@"owner_uid"]isEqual:@(uid)]||
+               !a5DynamicRequest(r,activeDynamicRequest[@"metallib_sha256"]))continue;
+            NSMutableDictionary *body=[r mutableCopy];[body removeObjectForKey:@"request_id"];
+            if([digest(a5Canonical(body))isEqual:key])[keys addObject:key];
+        }
+        closedir(files);
+    }
+    closedir(users);return keys;
+}
+static void a5HandleRequest(NSString *self,NSDictionary *request,NSArray *profiles,NSString *key)
+{
+    @try {a5HandleRequestAttempt(self,request,profiles,key);}
+    @catch(NSException *exception){
+        if(![exception.name isEqual:@"A5ShaderDemandYield"]||![activeRequestKey isEqual:key]||
+           ![activeDynamicRequest isEqual:request])@throw;
+        if(activeWork){
+            if(![activeWork hasPrefix:[cacheRoot stringByAppendingString:@"/.stage-work-"]]||
+               ![NSFileManager.defaultManager removeItemAtPath:activeWork error:NULL])fail(@"cannot clean yielded private workspace");
+        }
+        activeWork=nil;activeRequestKey=nil;activeDynamicRequest=nil;
+        a5WriteStatus(key,@"deferred",exception.reason);
+        fprintf(stderr,"A5XELTE shader compiler: DEFERRED request=%s retryable=1 published=0\n",key.UTF8String);
+    }
 }
 
 #include "a5shader_retirement.inc.m"
@@ -1213,15 +1267,17 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
         if([snapshot[@"request"][@"kind"]isEqual:@"function"])[functions addObject:snapshot];
         else [others addObject:snapshot];
     }
+    unsigned arrivalBudget=64,arrivals=0;
     for(NSArray *batch in @[functions,others])for(NSDictionary *snapshot in batch){
         NSDictionary *request=snapshot[@"request"];handled++;
         a5HandleRequest(self,request,knownProfiles,request[@"request_id"]);
+        if(a5DemandYielded){a5DemandYielded=NO;
+            arrivals+=a5DispatchArrivingFunctions(self,knownProfiles,rootfd,seen,&arrivalBudget);}
         [completed addObject:snapshot];
     }
     /* One fresh-name pass per scan, replacing the previous per-old-handler
      * rescans. Arrivals get real authentication/compilation before maintenance. */
-    unsigned arrivalBudget=64;
-    unsigned arrivals=a5DispatchArrivingFunctions(self,knownProfiles,rootfd,seen,&arrivalBudget);
+    arrivals+=a5DispatchArrivingFunctions(self,knownProfiles,rootfd,seen,&arrivalBudget);
     unsigned maintenance=0;
     if(!arrivals&&arrivalBudget&&oldNames.count){
         NSArray *ordered=[oldNames sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){

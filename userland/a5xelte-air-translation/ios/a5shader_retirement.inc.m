@@ -36,15 +36,15 @@ static BOOL a5RetireRequest(NSDictionary *r,NSData *bytes,uid_t uid,NSString *ke
  NSMutableDictionary *body=[r mutableCopy];[body removeObjectForKey:@"request_id"];
  return [digest(a5Canonical(body))isEqual:key];
 }
-static BOOL a5RetireRecord(int dir,NSDictionary *n,NSString *file){
+static BOOL a5RetireRecord(int dir,NSDictionary *n,NSString *file,unsigned limit){
  if(!a5ExactKeys(n,@[@"file",@"bytes",@"sha256",@"first_tag",@"work_registers",@"tls_bytes",@"wls_bytes"])||
-    ![n[@"file"]isEqual:file]||!a5Unsigned(n[@"bytes"],8192)||![n[@"bytes"]unsignedIntValue]||
+    ![n[@"file"]isEqual:file]||!a5Unsigned(n[@"bytes"],limit)||![n[@"bytes"]unsignedIntValue]||
     ([n[@"bytes"]unsignedIntValue]&15)||!a5HexDigest(n[@"sha256"])||
     !a5Unsigned(n[@"first_tag"],15)||[n[@"first_tag"]unsignedIntValue]<2||
     [n[@"first_tag"]unsignedIntValue]==6||[n[@"first_tag"]unsignedIntValue]==7||
     !a5Unsigned(n[@"work_registers"],16)||![n[@"work_registers"]unsignedIntValue]||
     ![n[@"tls_bytes"]isEqual:@0]||![n[@"wls_bytes"]isEqual:@0])return NO;
- NSData *code=a5RetireRead(dir,file.fileSystemRepresentation,geteuid(),0444,8192,NULL);
+ NSData *code=a5RetireRead(dir,file.fileSystemRepresentation,geteuid(),0444,limit,NULL);
  return code.length==[n[@"bytes"]unsignedIntegerValue]&&[digest(code)isEqual:n[@"sha256"]]&&
   (((const uint8_t*)code.bytes)[0]&15)==[n[@"first_tag"]unsignedIntValue];
 }
@@ -62,7 +62,7 @@ static int a5RetirePublication(NSDictionary *request,NSArray *knownProfiles,BOOL
   for(NSString *key in identity)if(![identity[key]isEqual:r[key]])ok=NO;
   if(success){
    NSMutableArray *keys=[identity.allKeys mutableCopy];[keys addObjectsFromArray:@[@"native",@"reflection",@"native_abi"]];
-   ok=ok&&a5ExactKeys(r,keys)&&a5RetireRecord(dir,r[@"native"],@"stage.midgard");
+   ok=ok&&a5ExactKeys(r,keys)&&a5RetireRecord(dir,r[@"native"],@"stage.midgard",[request[@"compiler_abi"]isEqual:@2]?16384:8192);
    NSDictionary *f=r[@"reflection"];NSData *data=a5RetireRead(dir,"reflection.json",geteuid(),0444,256*1024,NULL);
    NSDictionary *reflection=a5RetireJSON(data),*context=reflection[@"compilation_context"],*abi=r[@"native_abi"],*stats=abi[@"native_info"];
    ok=ok&&a5ExactKeys(f,@[@"file",@"bytes",@"sha256"])&&[f[@"file"]isEqual:@"reflection.json"]&&
@@ -71,6 +71,7 @@ static int a5RetirePublication(NSDictionary *request,NSArray *knownProfiles,BOOL
     [context[@"requested_function"]isEqual:request[@"function"]]&&[context[@"selected_native_stage_only"]isEqual:@YES]&&
     [context[@"translation_indexed_constants"]isEqual:request[@"indexed_constants"]]&&
     [abi[@"schema"]isEqual:@1]&&[abi[@"stage"]isEqual:request[@"stage"]]&&
+    (![request[@"compiler_abi"]isEqual:@2]||[abi[@"shader_anisotropy"]isEqual:@1])&&
     [stats[@"bytes"]isEqual:r[@"native"][@"bytes"]]&&[stats[@"first_tag"]isEqual:r[@"native"][@"first_tag"]]&&
     [stats[@"work_regs"]isEqual:r[@"native"][@"work_registers"]]&&[stats[@"tls"]isEqual:@0]&&[stats[@"wls"]isEqual:@0];
    /* Companion constants may also be present, but every requested constant
@@ -98,7 +99,7 @@ static int a5RetirePublication(NSDictionary *request,NSArray *knownProfiles,BOOL
     @"fragment_constants_sha256":digest(a5Canonical(request[@"fragment"][@"named_constants"])),
     @"vertex":a5NativeRecord(@"vertex.midgard",known[@"midgard"][@"vert"],[known[@"midgard"][@"vert"][@"native_info"][@"work_regs"]unsignedIntegerValue]),
     @"fragment":a5NativeRecord(@"fragment.midgard",known[@"midgard"][@"frag"],[known[@"midgard"][@"frag"][@"native_info"][@"work_regs"]unsignedIntegerValue])};
-   ok=ok&&[r isEqual:expected]&&a5RetireRecord(dir,r[@"vertex"],@"vertex.midgard")&&a5RetireRecord(dir,r[@"fragment"],@"fragment.midgard");
+   ok=ok&&[r isEqual:expected]&&a5RetireRecord(dir,r[@"vertex"],@"vertex.midgard",8192)&&a5RetireRecord(dir,r[@"fragment"],@"fragment.midgard",8192);
   }
   members=[NSSet setWithArray:@[@"receipt.json",@"vertex.midgard",@"fragment.midgard"]];
  }else ok=NO;

@@ -39,6 +39,12 @@ static NSString *activeRequestKey;
 static NSDictionary *activeDynamicRequest;
 static void a5DynamicFailure(NSDictionary *request,NSString *reason);
 static void a5WriteStatus(NSString *key, NSString *status, NSString *reason);
+static NSSet<NSString *> *a5RunnableFunctionKeys(void);
+static BOOL a5DemandYielded;
+#ifdef A5_SHADER_RUN_HOST_TEST
+static NSArray<NSString *> *(^a5RunTestReplacement)(NSArray<NSString *> *);
+#endif
+
 static void fail(NSString *reason);
 
 static void showSuccess(void)
@@ -192,7 +198,13 @@ static BOOL addAccounting(uint64_t *sum,uint64_t value)
 static void run(NSString *self, NSArray<NSString *> *command, NSString *log)
 {
     (void)self;
+#ifdef A5_SHADER_RUN_HOST_TEST
+    if(a5RunTestReplacement)command=a5RunTestReplacement(command);
+#endif
+    NSSet *initialPending=activeDynamicRequest?a5RunnableFunctionKeys():nil;
     double start = seconds(), lastProgress = start;
+    double lastDemandCheck=start,quietSince=start;
+    uint64_t lastUserProgress=0;long long lastLogProgress=-1;
     char request[65],stage[65];
     diagnosticToken(activeRequestKey.UTF8String,request);
     diagnosticToken(command[0].lastPathComponent.UTF8String,stage);
@@ -312,6 +324,37 @@ static void run(NSString *self, NSArray<NSString *> *command, NSString *log)
             kill(-pid,SIGKILL);
             while (waitpid(pid,&status,0)<0 && errno==EINTR) {}
             fail(invalid ? @"cannot account compiler process group" : @"compiler group exceeded500MiB");
+        }
+        /* No elapsed compile limit: CPU/output-progressing tools continue.
+         * An otherwise idle child may not monopolize a newer authenticated
+         * function demand forever. Cancel only our own unstarted compiler
+         * work, reap the whole group and retry its request later. */
+        if(activeDynamicRequest&&childAccounted&&seconds()-lastDemandCheck>=1){
+            double now=seconds();lastDemandCheck=now;
+            struct stat progressStat={0};long long progressBytes=-1;
+            if(!lstat(log.fileSystemRepresentation,&progressStat)&&S_ISREG(progressStat.st_mode))progressBytes=progressStat.st_size;
+            if(groupUser>lastUserProgress+1000000ULL||progressBytes!=lastLogProgress){
+                quietSince=now;lastUserProgress=groupUser;lastLogProgress=progressBytes;
+            }
+            if(now-quietSince>=10&&progressBytes==0){
+                NSMutableSet *arrived=[a5RunnableFunctionKeys() mutableCopy];
+                [arrived minusSet:initialPending?:[NSSet set]];
+                if(arrived.count){
+                    kill(-pid,SIGKILL);
+                    pid_t reaped;do{reaped=waitpid(pid,&status,0);}while(reaped<0&&errno==EINTR);
+                    if(reaped!=pid)fail(@"cannot reap yielded compiler child");
+                    BOOL gone=NO;
+                    for(unsigned attempt=0;attempt<50;attempt++){
+                        pid_t remaining[32]={};int n=proc_listpgrppids(pid,remaining,sizeof(remaining));
+                        if(n==0){gone=YES;break;}if(n<0||n>=32)break;usleep(20000);
+                    }
+                    if(!gone)fail(@"cannot prove yielded compiler group retired");
+                    fprintf(stderr,"A5XELTE shader compiler: YIELD request=%s stage=%s quiet=%.1f new_functions=%lu child_reaped=1\n",
+                        request,stage,now-quietSince,(unsigned long)arrived.count);
+                    a5DemandYielded=YES;
+                    @throw [NSException exceptionWithName:@"A5ShaderDemandYield" reason:@"new authenticated function arrived while tool made no user CPU/output progress" userInfo:nil];
+                }
+            }
         }
         if (seconds() - lastProgress >= 10) {
             struct stat logStat={0};long long logBytes=-1;

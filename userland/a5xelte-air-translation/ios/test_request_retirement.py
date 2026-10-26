@@ -79,7 +79,11 @@ int main(int argc,char **argv){@autoreleasepool{
 int main(int argc,char **argv){@autoreleasepool{if(argc!=2)return 90;
  NSMutableDictionary *r=[[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@(argv[1])] options:0 error:NULL]mutableCopy];
  [r removeObjectForKey:@"request_id"];[r removeObjectForKey:@"owner_uid"];NSError *error=nil;
- NSInteger result=A5MaliForwardShaderCompileRequest(r,NULL,&error);printf("%ld %s\\n",(long)result,error.localizedDescription.UTF8String?:"queued");return 0;}}
+ /* These quota fixtures fill the legacy pipeline lane. Construct a real typed
+  * pipeline envelope; forwarding a function would test a different lane. */
+ NSDictionary *v=A5MaliShaderCompileFunctionPayload(@"fixed_vert_lph_spc",MTLFunctionTypeVertex,nil,&error);
+ NSDictionary *pipeline=A5MaliShaderCompilePipelinePayload([MTLRenderPipelineDescriptor new],v,r,&error);
+ NSInteger result=A5MaliForwardShaderCompileRequest(pipeline,NULL,&error);printf("%ld %s\\n",(long)result,error.localizedDescription.UTF8String?:"queued");return 0;}}
 ''')
     producer = work / 'provider'
     subprocess.run(flags + ['-DA5_SHADER_REQUEST_HOST_TEST=1', f'-DA5_SHADER_REQUEST_TEST_ROOT="{spool}"', str(provider), '-framework', 'Foundation', '-framework', 'Metal', '-o', str(producer)], check=True)
@@ -115,7 +119,7 @@ int main(int argc,char **argv){@autoreleasepool{if(argc!=2)return 90;
         request(i)
     assert run() == (0, 64) and len(pending()) == 64
     full = subprocess.check_output([str(producer), str(payload_path)], text=True)
-    assert full.startswith('0 ') and 'limit64' in full, full
+    assert full.startswith('3 ') and len(pending()) == 64, full  # retryable Busy, no publication
     for p in pending():
         status(json.loads(p.read_bytes()))
     assert run() == (64, 0) and not pending()
