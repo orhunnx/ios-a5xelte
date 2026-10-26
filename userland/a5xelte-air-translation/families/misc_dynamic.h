@@ -145,7 +145,7 @@ static int a5_dynamic_analyze(nir_shader *nir,const struct a5_dynamic_profile *p
          if(!ubo&&nir->info.stage==MESA_SHADER_FRAGMENT)
             for(unsigned t=0;t<profile->profile.texture_count;t++){
                unsigned base=352+32*t;
-               if((offset>=base&&offset+bytes<=base+12)||
+               if((offset>=base&&offset+bytes<=base+16)||
                   (offset>=base+16&&offset+bytes<=base+28))texture_sysval=true;
             }
          if(!ubo && !(offset<=profile->profile.push_bytes && bytes<=profile->profile.push_bytes-offset) &&
@@ -224,6 +224,7 @@ static int a5_dynamic_write(const char *path,mesa_shader_stage stage,
    for(unsigned i=0;i<4;i++)if(info->textures&(1u<<i))fprintf(f,"%s%u",count++?",":"",i);
    fputs("],\"inputs\":",f);a5_dynamic_io_json(f,info->inputs,info->input_count);
    fputs(",\"outputs\":",f);a5_dynamic_io_json(f,info->outputs,info->output_count);
+   if(stage==MESA_SHADER_FRAGMENT)fputs(",\"shader_anisotropy\":1",f);
    if(profile->blend.enabled)fputs(",\"blend_lowered\":true",f);
    fprintf(f,",\"sysval_ubo0_read_extent\":%u,\"framebuffer_fetch\":%s}\n",
        info->ubo_bytes[0],info->framebuffer_fetch?"true":"false");

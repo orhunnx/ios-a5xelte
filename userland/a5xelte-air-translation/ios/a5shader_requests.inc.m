@@ -72,7 +72,7 @@ static BOOL a5RequestFunction(NSDictionary *f, NSString *stage,
         [f[@"source_library"] isEqual:@"quartzcore"] &&
         [f[@"metallib_sha256"] isEqual:sourceSHA] &&
         [f[@"gpu_id"] isEqual:@"07201000"] &&
-        [f[@"compiler_abi"] isEqual:@1] && [f[@"stage"] isEqual:stage] &&
+        ([f[@"compiler_abi"] isEqual:@1]||([stage isEqual:@"fragment"]&&[f[@"compiler_abi"] isEqual:@2])) && [f[@"stage"] isEqual:stage] &&
         [f[@"function"] isEqual:name] &&
         [f[@"named_constants"] isEqual:constants] &&
         [f[@"indexed_constants"] isEqual:@[]];
@@ -489,7 +489,8 @@ static BOOL a5DynamicRequest(NSDictionary *request,NSString *librarySHA)
         [request[@"kind"] isEqual:@"function"]&&[request[@"source_library"] isEqual:@"quartzcore"]&&
         [request[@"metallib_sha256"] isEqual:librarySHA]&&
         [request[@"gpu_id"] isEqual:@"07201000"]&&
-        a5Unsigned(request[@"compiler_abi"],1)&&[request[@"compiler_abi"] isEqual:@1]&&
+        a5Unsigned(request[@"compiler_abi"],2)&&([request[@"compiler_abi"] isEqual:@1]||
+        ([request[@"stage"] isEqual:@"fragment"]&&[request[@"compiler_abi"] isEqual:@2]))&&
         ( [request[@"stage"] isEqual:@"vertex"]||[request[@"stage"] isEqual:@"fragment"] )&&
         a5Identifier(request[@"function"])&&
         a5DynamicConstants(request[@"named_constants"],NO)&&
@@ -552,7 +553,7 @@ static NSDictionary *a5DynamicIdentity(NSDictionary *request,BOOL success)
 {
     NSMutableDictionary *identity=[@{@"schema":@2,@"kind":@"dynamic-stage",@"request_id":request[@"request_id"],
         @"source_library":@"quartzcore",@"metallib_sha256":request[@"metallib_sha256"],
-        @"gpu_id":@"07201000",@"compiler_abi":@1,@"stage":request[@"stage"],
+        @"gpu_id":@"07201000",@"compiler_abi":request[@"compiler_abi"],@"stage":request[@"stage"],
         @"function":request[@"function"],@"stage_compiled":@(success),@"pipeline_compatible":@NO,
         @"named_constants_sha256":digest(a5Canonical(request[@"named_constants"])),
         @"indexed_constants_sha256":digest(a5Canonical(request[@"indexed_constants"])),
@@ -975,6 +976,8 @@ static void a5CompileDynamic(NSString *self,NSDictionary *request,NSDictionary *
     receipt[@"native"]=@{@"file":@"stage.midgard",@"bytes":@(native.length),@"sha256":digest(native),
         @"first_tag":stats[@"first_tag"],@"work_registers":stats[@"work_regs"],@"tls_bytes":stats[@"tls"],@"wls_bytes":stats[@"wls"]};
     receipt[@"reflection"]=@{@"file":@"reflection.json",@"bytes":@(reflectionData.length),@"sha256":digest(reflectionData)};
+    if([request[@"compiler_abi"] isEqual:@2]&&![info[@"shader_anisotropy"] isEqual:@1])
+        fail(@"fragment compiler generation2 lacks actual shader anisotropy lowering");
     receipt[@"native_abi"]=info;
     a5PublishDynamic(request,receipt,@{@"stage.midgard":native,@"reflection.json":reflectionData});
     activeDynamicRequest=nil;

@@ -1685,7 +1685,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 sd.mipFilter>MTLSamplerMipFilterLinear || !sd.normalizedCoordinates ||
                 sd.sAddressMode!=MTLSamplerAddressModeClampToEdge ||
                 sd.tAddressMode!=MTLSamplerAddressModeClampToEdge ||
-                sd.rAddressMode!=MTLSamplerAddressModeClampToEdge || sd.maxAnisotropy!=1 ||
+                sd.rAddressMode!=MTLSamplerAddressModeClampToEdge || sd.maxAnisotropy<1 || sd.maxAnisotropy>16 ||
+                (sd.maxAnisotropy>1 && !(profile->flags&A5MaliProfileShaderAnisotropy)) ||
                 sd.compareFunction!=MTLCompareFunctionNever || sd.supportArgumentBuffers ||
                 !isfinite(sd.lodMinClamp) || !isfinite(sd.lodMaxClamp) ||
                 sd.lodMinClamp<0 || sd.lodMaxClamp<sd.lodMinClamp)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"sampler-state",r,nil,sampler,nil,0);
@@ -1693,7 +1694,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                 .magFilter=(uint32_t)sd.magFilter,.mipFilter=(uint32_t)sd.mipFilter,
                 .sAddressMode=A5RuntimeSamplerClampEdge,.tAddressMode=A5RuntimeSamplerClampEdge,
                 .rAddressMode=A5RuntimeSamplerClampEdge,.normalizedCoordinates=1,
-                .maxAnisotropy=1,.compareEnabled=0,.lodMinClamp=sd.lodMinClamp,.lodMaxClamp=sd.lodMaxClamp};
+                .maxAnisotropy=(uint32_t)sd.maxAnisotropy,.compareEnabled=0,.lodMinClamp=sd.lodMinClamp,.lodMaxClamp=sd.lodMaxClamp};
             continue;
         }
         if(r->kind!=A5MaliResourceTexture)continue;
@@ -1712,7 +1713,7 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
         if(!image)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-missing",r,nil,nil,nil,0);
         if(!(image.usage&MTLTextureUsageShaderRead))return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-usage",r,image,nil,nil,0);
         if(!sourceFormat)return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-format",r,image,nil,nil,0);
-        if(textured && ((profile->profileID!=A5MaliDynamicProfileID && r->metalIndex!=3) || image.mipmapLevelCount!=1 ||
+        if(textured && ((profile->profileID!=A5MaliDynamicProfileID && r->metalIndex!=3) || !image.mipmapLevelCount || image.mipmapLevelCount>A5RuntimeMipLevels ||
             image.textureType!=MTLTextureType2D || image.sampleCount!=1))return rejectMiscResource(_buffer.diagnosticID,profile,indexed,"source-subresource",r,image,nil,nil,0);
         if(image.buffer && (image.buffer.device!=_buffer.device ||
             image.buffer.storageMode!=MTLStorageModeShared || !image.buffer.readyForRead ||
@@ -2024,7 +2025,17 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
                     }else if(!query.surfaces[i]||!A5MaliRuntimeImageForTexture(t,0,t.privateSurface,&s,
                         (readImages&(1u<<i))?A5MaliRead:(A5MaliRead|A5MaliWrite),&image))return kIOReturnBadArgument;
                     unsigned slot=imageSlots[i].unsignedIntValue;
-                    if(slot<8)command.colorAttachments[slot]=image;else command.fragmentTextures[slot-32]=image;
+                    if(slot<8)command.colorAttachments[slot]=image;
+                    else {
+                        command.fragmentTextures[slot-32]=image;
+                        A5RuntimeMipChain *chain=&command.fragmentMips[slot-32];
+                        chain->levelCount=(uint32_t)t.mipmapLevelCount;
+                        if(!chain->levelCount||chain->levelCount>A5RuntimeMipLevels)return kIOReturnBadArgument;
+                        for(uint32_t level=0;level<chain->levelCount;level++){
+                            if(bufferIndex){if(level)return kIOReturnUnsupported;chain->levels[level]=image;}
+                            else if(!A5MaliRuntimeImageForTexture(t,level,t.privateSurface,&s,A5MaliRead,&chain->levels[level]))return kIOReturnBadArgument;
+                        }
+                    }
                 }
                 for(NSUInteger stage=0;stage<2;++stage)
                     for(NSNumber *slot in handles[stage]){

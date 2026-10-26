@@ -9,6 +9,7 @@ typedef struct {
  A5MaliFence last; kern_return_t error;
  A5NativeUploadArena arenas[4];unsigned arenaResets,arenaCreates,arenaWrites,arenaReuses,awaitingUploadSubmit;
  unsigned queryHits,queryBarriers,mutationBarriers,mappingBarriers,capacityFlushes;
+ uint64_t queryUS,transportUS,uploadUS,submitUS;
  uint64_t stagedBytes;
 } A5NativeBatchSession;
 static _Thread_local A5NativeBatchSession *nativeBatch;
@@ -66,9 +67,12 @@ static kern_return_t a5NativeBatchFlush(void){
  A5NativeBatchRequest h={{1,(uint32_t)bytes,0,0},count,0};memcpy(s->packet,&h,sizeof(h));
  /* All staged writes target fresh, disjoint arena slices. They are CPU-only
   * mutations until this point; no pending GPU job was started on failure. */
- kern_return_t upload=a5NativeArenaUpload(s);if(upload)return s->error=upload;
+ uint64_t uploadBegin=A5MaliWallUS();
+ kern_return_t upload=a5NativeArenaUpload(s);s->uploadUS+=A5MaliElapsedUS(uploadBegin,A5MaliWallUS());if(upload)return s->error=upload;
  A5NativeBatchResult r={0};size_t size=sizeof(r);submissionMayBeActive=1;
+ uint64_t submitBegin=A5MaliWallUS();
  kern_return_t kr=s->call(s->context,A5NativeBatchSelector,s->packet,bytes,&r,&size);
+ s->submitUS+=A5MaliElapsedUS(submitBegin,A5MaliWallUS());
  if(kr){if(kr==kIOReturnNotReady||kr==kIOReturnNotFound||kr==kIOReturnNoResources||kr==kIOReturnBadArgument)submissionMayBeActive=0;return s->error=kr;}
  if(size!=sizeof(r)||r.header.version!=1||r.header.size!=sizeof(r)||r.header.reserved0||r.header.reserved1||r.count!=count||r.reserved||r.completedCount>count||r.status>5||(!r.status&&r.completedCount!=count)||(r.status&&r.completedCount==count))return s->error=kIOReturnIOError;
  uint64_t previous=s->last.fragmentFence;
@@ -108,7 +112,10 @@ static kern_return_t a5NativeBatchTransport(void *context,uint32_t selector,cons
  if(s->count){if(selector==A5NativeQuerySelector)++s->queryBarriers;else ++s->mutationBarriers;}
  kern_return_t kr=a5NativeBatchFlush();if(kr)return kr;s->queryValid=0;
  size_t outputCapacity=size?*size:0;
+ uint64_t transportBegin=A5MaliWallUS();
  kr=s->call(s->context,selector,in,bytes,out,size);
+ uint64_t transportElapsed=A5MaliElapsedUS(transportBegin,A5MaliWallUS());
+ if(selector==A5NativeQuerySelector)s->queryUS+=transportElapsed;else s->transportUS+=transportElapsed;
  /* An ordinary buffer allocation may need a physical slot occupied by this
   * session's idle arena. The flush above proved all submitted reads terminal.
   * Never evict a slice already handed to the current unsubmitted draw. */
@@ -237,7 +244,8 @@ kern_return_t A5MaliEndNativeBatch(A5MaliClient*c,int commit,A5MaliFence*f){
   if(++reports<=8||!(reports&63)||kr)fprintf(stderr,"A5XELTE Metal upload arena: creates=%u writes=%u resets=%u staged_bytes=%llu result=%x uncertain=%u reused=%u retained=%u\n",s->arenaCreates,s->arenaWrites,s->arenaResets,(unsigned long long)s->stagedBytes,(unsigned)kr,submissionMayBeActive,s->arenaReuses,c->nativeUploadPool?kept:0);
  }
  {static unsigned reports;if(++reports<=8||!(reports&63)||kr)fprintf(stderr,
-  "A5XELTE Metal native grouping: queries_cached=%u query_barriers=%u mutation_barriers=%u epoch_barriers=%u capacity_flushes=%u result=%x\n",
-  s->queryHits,s->queryBarriers,s->mutationBarriers,s->mappingBarriers,s->capacityFlushes,(unsigned)kr);}
+  "A5XELTE Metal native grouping: queries_cached=%u query_barriers=%u mutation_barriers=%u epoch_barriers=%u capacity_flushes=%u result=%x query_us=%llu transport_us=%llu upload_us=%llu submit_us=%llu\n",
+  s->queryHits,s->queryBarriers,s->mutationBarriers,s->mappingBarriers,s->capacityFlushes,(unsigned)kr,(unsigned long long)s->queryUS,(unsigned long long)s->transportUS,
+  (unsigned long long)s->uploadUS,(unsigned long long)s->submitUS);}
  if(f)*f=s->last;c->call=s->call;c->context=s->context;nativeBatch=NULL;free(s->packet);free(s);return kr;
 }

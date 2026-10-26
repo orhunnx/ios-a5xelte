@@ -27,6 +27,8 @@ typedef struct {
  * source/destination through its terminal fence. Configured but AIR-unwritten
  * attachment2 is not fabricated, cleared, or silently treated as an output.
  * The caller must independently implement the renderpass load/store actions. */
+enum { A5RuntimeMipLevels=13 };
+typedef struct { uint32_t levelCount; A5RuntimeImage levels[A5RuntimeMipLevels]; } A5RuntimeMipChain;
 typedef struct {
     A5RuntimeDraw draw;
     uint32_t passIndex;
@@ -34,6 +36,7 @@ typedef struct {
     A5RuntimeImage colorAttachments[8];
     A5RuntimeImage fragmentTextures[31];
     A5RuntimeSampler fragmentSamplers[31];
+    A5RuntimeMipChain fragmentMips[31];
 } A5RuntimeMiscDraw;
 /* Large CPU-backed SSBOs must first be uploaded into a real mapped GPU buffer.
  * Copies of actual snapshots are bounded by the64KiB descriptor-owned arena;

@@ -344,6 +344,25 @@ int main(void) {
         assert(!chmod(dir.fileSystemRepresentation, 0777));
         assert(!A5MaliLoadDynamicShaderStage(rid, p, &error));
         assert(!chmod(dir.fileSystemRepresentation, 0755));
+        /* Compiler generation participates in identity. A copied generation1
+         * receipt cannot impersonate a shader-lowered anisotropic fragment. */
+        NSMutableDictionary *p2=clone(p);p2[@"compiler_abi"]=@2;
+        NSMutableDictionary *body2=[p2 mutableCopy];body2[@"owner_uid"]=@(geteuid());
+        NSString *rid2=sha(j(body2));assert(![rid2 isEqual:rid]);
+        NSString *dir2=[root stringByAppendingPathComponent:rid2];
+        assert([[NSFileManager defaultManager] createDirectoryAtPath:dir2 withIntermediateDirectories:NO attributes:nil error:NULL]);
+        assert(!chmod(dir2.fileSystemRepresentation,0755));
+        NSString *receipt2=[dir2 stringByAppendingPathComponent:@"receipt.json"];
+        writeFile([dir2 stringByAppendingPathComponent:@"stage.midgard"],code);
+        writeFile([dir2 stringByAppendingPathComponent:@"reflection.json"],reflect);
+        NSMutableDictionary *r2=clone(base);r2[@"request_id"]=rid2;
+        writeFile(receipt2,j(r2));assert(!A5MaliLoadDynamicShaderStage(rid2,p2,&error));
+        r2[@"compiler_abi"]=@2;
+        writeFile(receipt2,j(r2));assert(!A5MaliLoadDynamicShaderStage(rid2,p2,&error));
+        r2[@"native_abi"][@"shader_anisotropy"]=@1;
+        writeFile(receipt2,j(r2));id gen2=A5MaliLoadDynamicShaderStage(rid2,p2,&error);if(!gen2)NSLog(@"generation2: %@",error);assert(gen2);
+        r2[@"native_abi"][@"shader_anisotropy"]=@0;
+        writeFile(receipt2,j(r2));assert(!A5MaliLoadDynamicShaderStage(rid2,p2,&error));
         /* The retained entry survives replacing/removing publication and all caller dictionaries. */
         [[NSFileManager defaultManager] removeItemAtPath:root error:NULL];
         assert(!memcmp(entry.shader->bytes, raw, 16) && entry.resources[0].uniformBytes == 128 &&

@@ -127,7 +127,7 @@ int main(void){
  pan_unpack((struct mali_sampler_packed*)(descriptor+0x4160),SAMPLER,constant);
  assert(constant.wrap_mode_s==MALI_WRAP_MODE_REPEAT&&constant.wrap_mode_t==MALI_WRAP_MODE_REPEAT&&
         constant.wrap_mode_r==MALI_WRAP_MODE_REPEAT&&constant.maximum_lod==0.25f&&constant.minify_nearest);
- immutable.lodMaxClamp=1;
+ immutable.lodMaxClamp=16;
  assert(!A5MaliDynamicRuntimeProfileSupported(&p));immutable.lodMaxClamp=0.25f;
  resources[2].flags=A5MaliResourceRead|A5MaliResourcePadUniformTail;resources[2].uniformBytes=2;
  m.draw.fragmentBuffers[2].bytes=2;bias[0]=0xa5;bias[1]=0x5a;bias[2]=0xef;bias[3]=0xef;
@@ -175,6 +175,47 @@ int main(void){
  m.fragmentTextures[7].bytes=2047;
  assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))==A5RuntimeUnsupported&&zeroed());
  m.fragmentTextures[7].bytes=2048;
+ /* Real six-level surface payload, parent-view addresses, LOD and a shader
+  * capability gate independent from sampler metadata acceptance. */
+ A5RuntimeImage oldImage=m.fragmentTextures[3];A5RuntimeSampler oldSampler=m.fragmentSamplers[0];
+ m.fragmentTextures[3]=(A5RuntimeImage){0x23001000,4096,32,32,128,80};
+ A5RuntimeMipChain *chain=&m.fragmentMips[3];chain->levelCount=6;
+ unsigned w=32,h=32,offset=0;
+ for(unsigned level=0;level<6;level++){
+  unsigned row=(w*4+15)&~15u;offset=(offset+63)&~63u;
+  chain->levels[level]=(A5RuntimeImage){0x23001000+offset,row*h,w,h,row,80};
+  offset+=row*h;w=w>1?w/2:1;h=h>1?h/2:1;
+ }
+ m.fragmentSamplers[0].mipFilter=A5RuntimeSamplerMipLinear;
+ m.fragmentSamplers[0].maxAnisotropy=8;
+ assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))==A5RuntimeUnsupported&&zeroed());
+ p.flags|=A5MaliProfileShaderAnisotropy;
+ assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))==A5RuntimeOK);
+ pan_unpack((struct mali_texture_packed*)(descriptor+0x4200),TEXTURE,mips);
+ pan_unpack((struct mali_sampler_packed*)(descriptor+0x4140),SAMPLER,filtered);
+ assert(mips.width==32&&mips.height==32&&mips.levels==6);
+ assert(filtered.mipmap_mode==MALI_MIPMAP_MODE_TRILINEAR&&filtered.maximum_lod==5);
+ for(unsigned level=0;level<6;level++){
+  pan_unpack((struct mali_surface_with_stride_packed*)(descriptor+0x4220+16*level),SURFACE_WITH_STRIDE,span);
+  assert(span.pointer==chain->levels[level].gpuVA&&span.row_stride==chain->levels[level].rowBytes);
+ }
+ uint32_t n=0,anisotropy=0;memcpy(&n,descriptor+0x1400+352,4);memcpy(&anisotropy,descriptor+0x1400+364,4);
+ assert(n==6&&anisotropy==8);
+ chain->levels[5].gpuVA=chain->levels[0].gpuVA;
+ assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))!=A5RuntimeOK&&zeroed());
+ memset(chain,0,sizeof(*chain));m.fragmentTextures[3]=oldImage;m.fragmentSamplers[0]=oldSampler;
+ /* Large authenticated dynamic fragments must use the dedicated 16KiB
+  * code range, leaving polygon/tiler state and heap outside shader bytes. */
+ static uint8_t largeFragment[8992];memset(largeFragment,0x65,sizeof(largeFragment));
+ const uint8_t *oldCode=pass.fragment.bytes;unsigned oldBytes=pass.fragment.byteCount;
+ pass.fragment.bytes=largeFragment;pass.fragment.byteCount=sizeof(largeFragment);
+ assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))==A5RuntimeOK);
+ pan_unpack((struct mali_renderer_state_packed*)(descriptor+0x540),RENDERER_STATE,largeRSD);
+ assert(largeRSD.shader.shader==m.draw.descriptorGPUVA+0xc005);
+ assert(!memcmp(descriptor+0xc000,largeFragment,sizeof(largeFragment)));
+ assert(descriptor[0x10000]!=0x65);
+ pass.fragment.bytes=oldCode;pass.fragment.byteCount=oldBytes;
+ p.flags&=~A5MaliProfileShaderAnisotropy;
  m.fragmentSamplers[2].normalizedCoordinates=0;
  assert(A5MaliEncodeRuntimeMiscPass(&m,descriptor,sizeof(descriptor))==A5RuntimeUnsupported&&zeroed());
  puts("PASS dynamic multi-texture descriptors, independent samplers, half4 format, sparse slots and rejection/bounds (no GPU execution)");

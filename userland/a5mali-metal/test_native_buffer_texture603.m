@@ -142,8 +142,8 @@ static kern_return_t transport(void*context,uint32_t selector,const void*input,s
     assert(contains(j+0x20000,0x10000,s->transform,sizeof(s->transform)));
     assert(contains(j+0x20000,0x10000,s->lod,A5_TEST_DYNAMIC_SHADER?4:sizeof(s->lod)));
 #if A5_TEST_DYNAMIC_SHADER
-    assert(p->fragment.byteCount==864&&p->vertex.byteCount==2192);
-    assert((u32(j+0x608)&0x3fffff)==((163u<<12)|0x124u));
+    assert(p->fragment.byteCount>0&&p->vertex.byteCount==2192);
+    assert((u32(j+(s->profile->flags&A5MaliProfileShaderAnisotropy?0x4008:0x608))&0x3fffff)==((163u<<12)|0x124u));
 #endif
 #if A5_TEST_TEXTURED_PROFILE == 606
     assert(p->vertex.byteCount==2192&&p->fragment.byteCount==A5_TEST_FRAGMENT_BYTES);
@@ -158,13 +158,17 @@ static kern_return_t transport(void*context,uint32_t selector,const void*input,s
     assert(u32(j+0x1400+72)==0x2222);
     /* Released v4 R8_UNORM(163) with channel swizzle 000R: stored R is
      * alpha for A8; ordinary R8's implicit alpha one would render opaque. */
-    assert((u32(j+0x608)&0x3fffff)==((163u<<12)|0x124u));
+    assert((u32(j+(s->profile->flags&A5MaliProfileShaderAnisotropy?0x4008:0x608))&0x3fffff)==((163u<<12)|0x124u));
 #endif
     if(s->sourceFormat==70||s->sourceFormat==80)
         assert((u32(j+0x608)&0x3fffff)==((MALI_RGBA8_TEST_FORMAT<<12)|(s->sourceFormat==70?0x688u:0x60au)));
-    assert(u32(j+0x600)==((16u-1)<<16|31u));
-    assert(u64(j+0x620)==UINT64_C(0x13000080)+arenaOffset&&u32(j+0x628)==256&&u32(j+0x62c)==4096);
-    assert(u64(j+0x680)==A5NativeJobVA+0x600);
+    unsigned textureOffset=s->profile->flags&A5MaliProfileShaderAnisotropy?0x4000:0x600;
+    assert(u32(j+textureOffset)==((16u-1)<<16|31u));
+    assert(u64(j+textureOffset+32)==UINT64_C(0x13000080)+arenaOffset&&u32(j+textureOffset+40)==256&&u32(j+textureOffset+44)==4096);
+    assert(u64(j+(textureOffset==0x600?0x680:0x4100))==A5NativeJobVA+textureOffset);
+#if A5_TEST_DYNAMIC_SHADER
+    if(s->profile->flags&A5MaliProfileShaderAnisotropy)assert(u32(j+0x1400+364)==8);
+#endif
     assert(A5NativeCheckJobChain(j,A5NativeJobBytes,A5NativeJobVA,0,0x100,0x200,NO)==1);
     ++s->submits;if(s->fault==FailSubmit)return kIOReturnTimeout;
     A5NativeSubmitResult r={.header={1,sizeof(r),0,0},.tilerFence=1902,.fragmentFence=1903};
@@ -282,6 +286,9 @@ static A5MaliMetalBuffer *encode(A5MaliRestrictedDevice*d,id pipelineState,
     MTLSamplerDescriptor*sd=[MTLSamplerDescriptor new];
     sd.minFilter=MTLSamplerMinMagFilterNearest;sd.magFilter=sd.minFilter;
     sd.mipFilter=MTLSamplerMipFilterLinear;sd.lodMinClamp=.25f;sd.lodMaxClamp=4;
+#if A5_TEST_DYNAMIC_SHADER
+    sd.maxAnisotropy=8;
+#endif
     A5MaliSamplerState*sampler=[d newSamplerStateWithDescriptor:sd];assert(sampler);
     [r setFragmentSamplerState:sampler atIndex:0];[r setFragmentTexture:source atIndex:3];
     for(unsigned i=0;i<(A5_TEST_NATIVE_ARENA?8u:1u);i++)

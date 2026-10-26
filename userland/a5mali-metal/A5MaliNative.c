@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include "A5MaliTiming.h"
 _Static_assert(sizeof(A5NativeQueryRequest)==80,"native query ABI");
 _Static_assert(sizeof(A5NativeQueryResult)==352,"native spans ABI");
 _Static_assert(sizeof(A5NativeSubmitRequest)==120,"native submit ABI");

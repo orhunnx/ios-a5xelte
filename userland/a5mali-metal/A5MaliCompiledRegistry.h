@@ -49,6 +49,7 @@ enum { A5MaliProfileFixedViewport = 1, A5MaliProfileNearestSampler = 2,
        A5MaliProfileRenderState = 1048576,
        A5MaliProfileShaderBlend = 2097152,
        /* Reflected position/two-UV vertex program with no color input/export. */
+       A5MaliProfileShaderAnisotropy = 8388608,
        A5MaliProfileVertexNoColor = 4194304 };
 enum { A5MaliDynamicProfileID = 65536 };
 

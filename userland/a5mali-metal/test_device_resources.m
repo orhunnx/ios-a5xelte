@@ -245,13 +245,17 @@ int main(void)
             assert(created.descriptor.minFilter==min&&created.descriptor.magFilter==mag&&created.descriptor.mipFilter==mip&&
                 created.descriptor.lodMinClamp==.5f&&created.descriptor.lodMaxClamp==FLT_MAX);
         }
+        for(unsigned aniso=1;aniso<=16;aniso++){
+            MTLSamplerDescriptor *d=[MTLSamplerDescriptor new];d.maxAnisotropy=aniso;
+            A5MaliSamplerState *state=[device newSamplerStateWithDescriptor:d];assert(state&&state.descriptor.maxAnisotropy==aniso);
+        }
         for(unsigned fault=0;fault<14;++fault){
             MTLSamplerDescriptor *bad=[MTLSamplerDescriptor new];
             switch(fault){
                 case 0:bad.minFilter=(MTLSamplerMinMagFilter)99;break;
                 case 1:bad.magFilter=(MTLSamplerMinMagFilter)99;break;
                 case 2:bad.mipFilter=(MTLSamplerMipFilter)99;break;
-                case 3:bad.maxAnisotropy=2;break;
+                case 3:bad.maxAnisotropy=17;break;
                 case 4:bad.sAddressMode=MTLSamplerAddressModeRepeat;break;
                 case 5:bad.tAddressMode=MTLSamplerAddressModeRepeat;break;
                 case 6:bad.rAddressMode=MTLSamplerAddressModeRepeat;break;

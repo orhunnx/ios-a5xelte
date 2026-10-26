@@ -160,7 +160,7 @@ static BOOL payload(id p) {
                 ]) &&
            exact(p[@"schema"], 1) && [p[@"kind"] isEqual:@"function"] &&
            [p[@"source_library"] isEqual:@"quartzcore"] && [p[@"metallib_sha256"] isEqual:librarySHA] &&
-           [p[@"gpu_id"] isEqual:@"07201000"] && exact(p[@"compiler_abi"], 1) &&
+           [p[@"gpu_id"] isEqual:@"07201000"] && (exact(p[@"compiler_abi"], 1)||([p[@"stage"] isEqual:@"fragment"]&&exact(p[@"compiler_abi"],2))) &&
            ([p[@"stage"] isEqual:@"vertex"] || [p[@"stage"] isEqual:@"fragment"]) &&
            identifier(p[@"function"]) && constants(p[@"named_constants"], NO) &&
            constants(p[@"indexed_constants"], YES);
@@ -266,6 +266,7 @@ static BOOL payload(id p) {
         ![a[@"stage"] isEqual:(_stage == 1 ? @"vertex" : @"fragment")] ||
         !number(a[@"sysval_ubo0_read_extent"], 576))
         return NO;
+    if([_functionPayload[@"compiler_abi"] isEqual:@2] && !exact(a[@"shader_anisotropy"],1))return NO;
     NSDictionary *info = a[@"native_info"];
     if (![info isKindOfClass:NSDictionary.class] || !exact(info[@"bytes"], _shader.byteCount) ||
         !exact(info[@"first_tag"], _shader.firstTag) || !exact(info[@"work_regs"], _shader.workRegisters) ||
@@ -442,7 +443,8 @@ static BOOL payload(id p) {
             }
             if(source[@"Synthetic"]){
                 /* Released-Mesa dynamic inspection rejects every surviving
-                 * global/SSBO access and every FS UBO0 load outside push0..80.
+                 * global/SSBO access and every FS UBO0 load outside push0..80
+                 * or the independently checked per-texture sysval records.
                  * A declared ConstantBlob may therefore be omitted only for
                  * this explicitly dead, bounded fragment contract. It is not
                  * an application buffer slot or a source of zero-filled data. */
@@ -453,7 +455,8 @@ static BOOL payload(id p) {
                    ![synthetic[@"binding"] isEqual:@"ConstantBlob"]||
                    !exact(b[@"ty"],7)||live[@([b[@"binding"] unsignedIntValue]+1)]||
                    ([a[@"sysval_ubo0_read_extent"] unsignedIntValue]>80&&
-                    !(lowered&&[a[@"sysval_ubo0_read_extent"] unsignedIntValue]<=496)))return NO;
+                    !(lowered&&[a[@"sysval_ubo0_read_extent"] unsignedIntValue]<=496)&&
+                    !(exact(a[@"shader_anisotropy"],1)&&[a[@"sysval_ubo0_read_extent"] unsignedIntValue]<=480)))return NO;
                 NSString *blob=nil;unsigned matching=0;
                 for(id stage in _reflection[@"stages"])if([stage[@"stage"] isEqual:@"frag"]){blob=stage[@"constant_blob"];matching++;}
                 if(matching!=1||![blob isKindOfClass:NSString.class]||!blob.length||
@@ -612,7 +615,7 @@ A5MaliDynamicShaderCacheEntry *A5MaliLoadDynamicShaderStage(NSString *requestID,
         if (![r isKindOfClass:NSDictionary.class] || !exact(r[@"schema"], 2) ||
             ![r[@"kind"] isEqual:@"dynamic-stage"] || ![r[@"request_id"] isEqual:requestID] ||
             ![r[@"source_library"] isEqual:@"quartzcore"] || ![r[@"metallib_sha256"] isEqual:librarySHA] ||
-            ![r[@"gpu_id"] isEqual:@"07201000"] || !exact(r[@"compiler_abi"], 1) ||
+            ![r[@"gpu_id"] isEqual:@"07201000"] || ![r[@"compiler_abi"] isEqual:functionPayload[@"compiler_abi"]] ||
             ![r[@"stage"] isEqual:functionPayload[@"stage"]] ||
             ![r[@"function"] isEqual:functionPayload[@"function"]] ||
             ![r[@"named_constants_sha256"] isEqual:digest(json(functionPayload[@"named_constants"]))] ||
@@ -635,7 +638,7 @@ A5MaliDynamicShaderCacheEntry *A5MaliLoadDynamicShaderStage(NSString *requestID,
         id n = r[@"native"], f = r[@"reflection"];
         if (![n isKindOfClass:NSDictionary.class] || ![f isKindOfClass:NSDictionary.class] ||
             ![n[@"file"] isEqual:@"stage.midgard"] || ![f[@"file"] isEqual:@"reflection.json"] ||
-            !number(n[@"bytes"], 8192) || ![n[@"bytes"] unsignedIntValue] ||
+            !number(n[@"bytes"], [functionPayload[@"compiler_abi"] isEqual:@2]?16384:8192) || ![n[@"bytes"] unsignedIntValue] ||
             ([n[@"bytes"] unsignedIntValue] & 15) || (!number(n[@"first_tag"],15)||[n[@"first_tag"] unsignedIntValue]<2||
              [n[@"first_tag"] unsignedIntValue]==6||[n[@"first_tag"] unsignedIntValue]==7) ||
             !number(n[@"work_registers"], 16) || ![n[@"work_registers"] unsignedIntValue] ||
@@ -644,7 +647,7 @@ A5MaliDynamicShaderCacheEntry *A5MaliLoadDynamicShaderStage(NSString *requestID,
             close(dir);
             return fail(error, EINVAL, @"dynamic stage code/metadata bounds rejected");
         }
-        NSData *code = readFile(dir, "stage.midgard", 8192, error);
+        NSData *code = readFile(dir, "stage.midgard", [functionPayload[@"compiler_abi"] isEqual:@2]?16384:8192, error);
         NSData *reflect = code ? readFile(dir, "reflection.json", 256 * 1024, error) : nil;
         close(dir);
         if (!code || !reflect) {

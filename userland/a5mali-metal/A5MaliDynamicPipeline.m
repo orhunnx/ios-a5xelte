@@ -507,6 +507,7 @@ A5MaliDynamicPipelineEntry *A5MaliComposeDynamicPipeline(MTLRenderPipelineDescri
     e->_profile=(A5MaliCompiledProfile){.profileID=A5MaliDynamicProfileID,.name="dynamic-reflected-QC",
         .vertexName=e->_vertexName.UTF8String,.fragmentName=e->_fragmentName.UTF8String,
         .colorFormats={(uint32_t)target},.flags=A5MaliProfileDynamicStages|A5MaliProfileSourceOverBlend|
+            ([fs.nativeABI[@"shader_anisotropy"] isEqual:@1]?A5MaliProfileShaderAnisotropy:0)|
             A5MaliProfileRenderState|(shaderBlend?A5MaliProfileShaderBlend:0)|
             (color?A5MaliProfileDynamicColorVarying:0)|(fetch?A5MaliProfileFramebufferFetch:0)|(position?A5MaliProfileFragmentPosition:0)|(noInputs?A5MaliProfileFragmentNoInputs:0)|(vertexColorOnly?A5MaliProfileVertexColorOnly:0)|(vertexTwoUV?A5MaliProfileVertexTwoUV:0)|(vertexNoColor?A5MaliProfileVertexNoColor:0)|(fragmentTwoUV?A5MaliProfileFragmentTwoUV:0)|(fragmentColorOnly?A5MaliProfileFragmentColorOnly:0)|
             (fs&&!noInputs&&!fragmentColorOnly&&![fs.nativeABI[@"native_info"][@"textures"] unsignedIntValue]?A5MaliProfileFragmentNoTextures:0),.passes=&e->_pass,.passCount=1,

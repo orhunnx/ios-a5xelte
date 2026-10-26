@@ -118,6 +118,7 @@ NSDictionary *A5MaliShaderCompileFunctionPayload(NSString *name,MTLFunctionType 
         NSArray *named=captureConstants(constants,NO,error);if(!named)return nil;
         NSArray *indexed=captureConstants(constants,YES,error);if(!indexed)return nil;
         NSMutableDictionary *payload=[base(@"function") mutableCopy];
+        if(stage==MTLFunctionTypeFragment)payload[@"compiler_abi"]=@2;
         [payload addEntriesFromDictionary:@{@"stage":stage==MTLFunctionTypeVertex?@"vertex":@"fragment",
             @"function":[name copy],@"named_constants":named,@"indexed_constants":indexed}];
         return [payload copy];
@@ -163,7 +164,8 @@ static BOOL functionPayload(NSDictionary *value,NSString *stage)
     if(blend&&(![stage isEqual:@"fragment"]||!A5MaliValidBlendRequest(blend)))return NO;
     return keysAre(plain,@[@"schema",@"kind",@"source_library",@"metallib_sha256",@"gpu_id",@"compiler_abi",
         @"stage",@"function",@"named_constants",@"indexed_constants"])&&[value[@"kind"] isEqual:@"function"]&&
-        [value[@"schema"] isEqual:@1]&&[value[@"compiler_abi"] isEqual:@1]&&
+        [value[@"schema"] isEqual:@1]&&([value[@"compiler_abi"] isEqual:@1]||
+        ([stage isEqual:@"fragment"]&&[value[@"compiler_abi"] isEqual:@2]))&&
         [value[@"source_library"] isEqual:@"quartzcore"]&&[value[@"metallib_sha256"] isEqual:sourceSHA]&&
         [value[@"gpu_id"] isEqual:@"07201000"]&&[value[@"stage"] isEqual:stage]&&
         identifier(value[@"function"])&&validConstantArray(value[@"named_constants"],NO)&&
@@ -306,7 +308,7 @@ static NSData *requestData(NSDictionary *payload,NSString **requestID,NSError **
          validDescriptor(payload[@"descriptor"]));
     if(!valid||![payload[@"schema"] isEqual:@1]||![payload[@"source_library"] isEqual:@"quartzcore"]||
         ![payload[@"metallib_sha256"] isEqual:sourceSHA]||![payload[@"gpu_id"] isEqual:@"07201000"]||
-        ![payload[@"compiler_abi"] isEqual:@1]||payload[@"request_id"]||payload[@"owner_uid"]){
+        (![payload[@"compiler_abi"] isEqual:@1]&&!(function&&[payload[@"stage"] isEqual:@"fragment"]&&[payload[@"compiler_abi"] isEqual:@2]))||payload[@"request_id"]||payload[@"owner_uid"]){
         reject(error,@"invalid compiler request envelope");return nil;
     }
     uid_t uid=geteuid();NSMutableDictionary *body=[payload mutableCopy];body[@"owner_uid"]=@(uid);

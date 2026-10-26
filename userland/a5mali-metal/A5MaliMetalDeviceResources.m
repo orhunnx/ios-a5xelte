@@ -720,7 +720,7 @@ static const char *samplerRejectionReason(MTLSamplerDescriptor *d)
     if(d.magFilter!=MTLSamplerMinMagFilterNearest&&d.magFilter!=MTLSamplerMinMagFilterLinear)return "mag-filter";
     if(d.mipFilter!=MTLSamplerMipFilterNotMipmapped&&d.mipFilter!=MTLSamplerMipFilterNearest&&
         d.mipFilter!=MTLSamplerMipFilterLinear)return "mip-filter";
-    if(d.maxAnisotropy!=1)return "anisotropy";
+    if(d.maxAnisotropy<1||d.maxAnisotropy>16)return "anisotropy";
     if(d.sAddressMode!=MTLSamplerAddressModeClampToEdge||d.tAddressMode!=MTLSamplerAddressModeClampToEdge||
         d.rAddressMode!=MTLSamplerAddressModeClampToEdge)return "address-mode";
     if(!d.normalizedCoordinates)return "unnormalized-coordinates";

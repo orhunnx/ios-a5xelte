@@ -18,8 +18,9 @@ enum { SIZE=0x40000, W=32,H=32, FB=0x300,VS_RSD=0x500,FS_RSD=0x540,
  VS_VARY=0xa00,VS_VARY_BUFS=0xa80,FS_VARY=0xc00,FS_VARY_BUFS=0xc80,
  VIEWPORT=0xe00,VS_SYS=0x1000,FS_SYS=0x1400,
  SSBO_VERT=0x2000,ORDINARY=0x3000,POS=0x30000,PSIZ=0x31000,
- VARY_DATA=0x32000,VS_CODE=0x6000,FS_CODE=0x8000,POLY=0xa000,POLY_BODY=0xa200,
+ VARY_DATA=0x32000,VS_CODE=0x6000,FS_CODE=0x8000,BIG_FS_CODE=0xc000,POLY=0xa000,POLY_BODY=0xa200,
  DYNAMIC_TEX=0x4000,DYNAMIC_TEX_TABLE=0x4100,DYNAMIC_SAMPLERS=0x4140,
+ MIP_TEX=0x4200,MIP_TEX_STRIDE=256,
  HEAP=0x10000,HEAP_SIZE=0x10000,SOURCE=0x20000,LUT=0x22000,
  DEST=0x24000,GUARDS=0x28000 };
 enum { RG_SWIZZLE=MALI_CHANNEL_R|(MALI_CHANNEL_G<<3)|(MALI_CHANNEL_0<<6)|(MALI_CHANNEL_1<<9),
@@ -124,7 +125,7 @@ static int valid_image(const A5RuntimeImage*i){unsigned n=bpp(i->metalPixelForma
  * native code. The runtime sampler supplies filtering and clamp-to-edge
  * addressing. One source mip means every valid LOD resolves to level0. */
 static int textured_sampler(const A5RuntimeSampler*s){
- return s->valid==1&&s->normalizedCoordinates==1&&s->maxAnisotropy==1&&
+ return s->valid==1&&s->normalizedCoordinates==1&&s->maxAnisotropy>=1&&s->maxAnisotropy<=16&&
   !s->compareEnabled&&s->minFilter<=A5RuntimeSamplerLinear&&
   s->magFilter<=A5RuntimeSamplerLinear&&s->mipFilter<=A5RuntimeSamplerMipLinear&&
   s->sAddressMode==A5RuntimeSamplerClampEdge&&
@@ -132,6 +133,42 @@ static int textured_sampler(const A5RuntimeSampler*s){
   s->rAddressMode==A5RuntimeSamplerClampEdge&&
   isfinite(s->lodMinClamp)&&isfinite(s->lodMaxClamp)&&
   s->lodMinClamp>=0&&s->lodMaxClamp>=s->lodMinClamp;
+}
+/* v4 stores an inline16-byte surface-with-stride for EVERY mip, in
+ * level order. The logical view may begin at a nonzero physical atlas offset. */
+static int texture_descriptor(uint8_t*d,unsigned at,const A5RuntimeMiscDraw*m,
+ unsigned slot,unsigned format,unsigned swizzle){
+ const A5RuntimeImage *base=&m->fragmentTextures[slot];
+ const A5RuntimeMipChain *chain=&m->fragmentMips[slot];
+ unsigned levels=chain->levelCount?chain->levelCount:1;
+ if(levels>A5RuntimeMipLevels||32+16*levels>MIP_TEX_STRIDE)return A5RuntimeBounds;
+ unsigned width=base->width,height=base->height;
+ for(unsigned level=0;level<levels;level++){
+  const A5RuntimeImage *im=chain->levelCount?chain->levels+level:base;
+  if(!valid_image(im)||im->metalPixelFormat!=base->metalPixelFormat||im->width!=width||im->height!=height||
+     (level==0&&(im->gpuVA!=base->gpuVA||im->rowBytes!=base->rowBytes||im->bytes!=base->bytes))||
+     overlap(im->gpuVA,im->bytes,m->draw.descriptorGPUVA,SIZE))return A5RuntimeBounds;
+  for(unsigned i=0;i<m->draw.profile->passCount;i++){
+   const A5RuntimeImage *out=m->colorAttachments+m->draw.profile->passes[i].logicalTarget;
+   if(overlap(im->gpuVA,im->bytes,out->gpuVA,out->bytes))return A5RuntimeUnsupported;
+  }
+  for(unsigned i=0;i<level;i++)if(overlap(im->gpuVA,im->bytes,chain->levels[i].gpuVA,chain->levels[i].bytes))return A5RuntimeBounds;
+  pan_pack((struct mali_surface_with_stride_packed*)(d+at+32+16*level),SURFACE_WITH_STRIDE,c){
+   c.pointer=im->gpuVA;c.row_stride=im->rowBytes;c.surface_stride=im->rowBytes*im->height;
+  }
+  if(level+1<levels&&width==1&&height==1)return A5RuntimeBounds;
+  width=width>1?width>>1:1;height=height>1?height>>1:1;
+ }
+ pan_pack((struct mali_texture_packed*)(d+at),TEXTURE,c){
+  c.width=base->width;c.height=base->height;c.array_size=1;c.levels=levels;
+  c.format=(format<<12)|swizzle;c.dimension=MALI_TEXTURE_DIMENSION_2D;
+  c.texel_ordering=MALI_TEXTURE_LAYOUT_LINEAR;c.swizzle=0x688;
+ }
+ return A5RuntimeOK;
+}
+static float texture_max_lod(const A5RuntimeSampler*s,unsigned levels){
+ if(s->mipFilter==A5RuntimeSamplerMipNone)return fminf(s->lodMinClamp,(float)(levels-1))+1.0f/256.0f;
+ return fminf(s->lodMaxClamp,(float)(levels-1));
 }
 static int textured_image(uint8_t*d,const A5RuntimeMiscDraw*m){
  const A5RuntimeImage*im=&m->fragmentTextures[3];const A5RuntimeSampler*s=&m->fragmentSamplers[0];
@@ -150,24 +187,21 @@ static int textured_image(uint8_t*d,const A5RuntimeMiscDraw*m){
   im->metalPixelFormat==30?MALI_RG8_UNORM:MALI_R8_UNORM;
  const unsigned swizzle=im->metalPixelFormat==80?0x60a:im->metalPixelFormat==70?0x688:
   im->metalPixelFormat==30?RG_SWIZZLE:im->metalPixelFormat==1?A_SWIZZLE:R_SWIZZLE;
- pan_pack((struct mali_texture_packed*)(d+TEX0),TEXTURE,c){
-  c.width=im->width;c.height=im->height;c.array_size=1;c.levels=1;
-  c.format=(format<<12)|swizzle;c.dimension=MALI_TEXTURE_DIMENSION_2D;
-  c.texel_ordering=MALI_TEXTURE_LAYOUT_LINEAR;c.swizzle=0x688;
- }
- pan_pack((struct mali_surface_with_stride_packed*)(d+TEX0+32),SURFACE_WITH_STRIDE,c){
-  c.pointer=im->gpuVA;c.row_stride=im->rowBytes;c.surface_stride=im->rowBytes*im->height;
- }
- u64(d,TEX_TABLE,VA+TEX0);
+ unsigned levels=m->fragmentMips[3].levelCount?m->fragmentMips[3].levelCount:1;
+ unsigned tex=levels>1?MIP_TEX:TEX0;
+ int textureStatus=texture_descriptor(d,tex,m,3,format,swizzle);if(textureStatus)return textureStatus;
+ if(s->maxAnisotropy>1)return A5RuntimeUnsupported; /* static code has no shader anisotropy */
+ u64(d,TEX_TABLE,VA+tex);
  pan_pack((struct mali_sampler_packed*)(d+SAMPLERS),SAMPLER,c){
   c.normalized_coordinates=true;c.seamless_cube_map=false;
   c.minify_nearest=s->minFilter==A5RuntimeSamplerNearest;
   c.magnify_nearest=s->magFilter==A5RuntimeSamplerNearest;
-  c.mipmap_mode=MALI_MIPMAP_MODE_NEAREST;
+  c.mipmap_mode=s->mipFilter==A5RuntimeSamplerMipLinear?MALI_MIPMAP_MODE_TRILINEAR:MALI_MIPMAP_MODE_NEAREST;
   c.wrap_mode_s=MALI_WRAP_MODE_CLAMP_TO_EDGE;
   c.wrap_mode_t=MALI_WRAP_MODE_CLAMP_TO_EDGE;
   c.wrap_mode_r=MALI_WRAP_MODE_CLAMP_TO_EDGE;
-  c.minimum_lod=0;c.maximum_lod=0;
+  c.minimum_lod=fminf(s->lodMinClamp,(float)(levels-1));
+  c.maximum_lod=levels>1?texture_max_lod(s,levels):0;
  }
  /* The normalized-coordinate native shader samples interpolated UV directly.
   * It does not read synthetic texture dimensions from FS_SYS. */
@@ -177,7 +211,8 @@ static int textured_image(uint8_t*d,const A5RuntimeMiscDraw*m){
  * Multi-resource or half4 inputs use the independent expanded table below. */
 static int dynamic_legacy_texture(const A5RuntimeMiscDraw*m){
  unsigned textures=0,samplers=0;const A5MaliCompiledProfile*p=m->draw.profile;
- if(m->fragmentTextures[3].metalPixelFormat==115)return 0;
+ if(m->fragmentTextures[3].metalPixelFormat==115||m->fragmentMips[3].levelCount>1||
+    (p->flags&A5MaliProfileShaderAnisotropy))return 0;
  for(unsigned i=0;i<p->resourceCount;i++){
   const A5MaliCompiledResource*r=p->resources+i;
   if(r->kind==A5MaliResourceTexture){if(r->metalIndex!=3||r->nativeIndex||textures++)return 0;}
@@ -188,6 +223,8 @@ static int dynamic_legacy_texture(const A5RuntimeMiscDraw*m){
 /* Four independently reflected combined image/sampler bindings live in a
  * separate descriptor region. Legacy descriptor offsets remain byte-identical.
  * No assumption about a Metal texture/sampler slot is made on this route. */
+_Static_assert(BIG_FS_CODE+0x4000<=HEAP,"expanded fragment must not overlap tiler heap");
+_Static_assert(MIP_TEX+4*MIP_TEX_STRIDE<=VS_CODE,"mip payloads must not overlap shader code");
 _Static_assert(DYNAMIC_TEX+4*64<=DYNAMIC_TEX_TABLE,"dynamic texture table overlap");
 _Static_assert(DYNAMIC_TEX_TABLE+4*8<=DYNAMIC_SAMPLERS,"dynamic sampler table overlap");
 _Static_assert(DYNAMIC_SAMPLERS+4*MALI_SAMPLER_LENGTH<=VS_CODE,"dynamic code overlap");
@@ -226,34 +263,30 @@ static int dynamic_images(uint8_t*d,const A5RuntimeMiscDraw*m){
    im->metalPixelFormat==115?MALI_RGBA16F:im->metalPixelFormat==30?MALI_RG8_UNORM:MALI_R8_UNORM;
   unsigned swizzle=im->metalPixelFormat==80?0x60a:(im->metalPixelFormat==70||im->metalPixelFormat==115)?0x688:
    im->metalPixelFormat==30?RG_SWIZZLE:im->metalPixelFormat==1?A_SWIZZLE:R_SWIZZLE;
-  unsigned tex=DYNAMIC_TEX+r->nativeIndex*64;
-  pan_pack((struct mali_texture_packed*)(d+tex),TEXTURE,c){
-   c.width=im->width;c.height=im->height;c.array_size=1;c.levels=1;c.format=(format<<12)|swizzle;
-   c.dimension=MALI_TEXTURE_DIMENSION_2D;c.texel_ordering=MALI_TEXTURE_LAYOUT_LINEAR;c.swizzle=0x688;
-  }
-  pan_pack((struct mali_surface_with_stride_packed*)(d+tex+32),SURFACE_WITH_STRIDE,c){
-   c.pointer=im->gpuVA;c.row_stride=im->rowBytes;c.surface_stride=im->rowBytes*im->height;
-  }
+  unsigned levels=m->fragmentMips[r->metalIndex].levelCount?m->fragmentMips[r->metalIndex].levelCount:1;
+  unsigned tex=levels>1?MIP_TEX+r->nativeIndex*MIP_TEX_STRIDE:DYNAMIC_TEX+r->nativeIndex*64;
+  int textureStatus=texture_descriptor(d,tex,m,r->metalIndex,format,swizzle);if(textureStatus)return textureStatus;
+  if(sm->maxAnisotropy>1&&!(p->flags&A5MaliProfileShaderAnisotropy))return A5RuntimeUnsupported;
   u64(d,DYNAMIC_TEX_TABLE+r->nativeIndex*8,va+tex);
   pan_pack((struct mali_sampler_packed*)(d+DYNAMIC_SAMPLERS+r->nativeIndex*MALI_SAMPLER_LENGTH),SAMPLER,c){
    c.normalized_coordinates=true;c.seamless_cube_map=false;
    c.minify_nearest=sm->minFilter==A5RuntimeSamplerNearest;
    c.magnify_nearest=sm->magFilter==A5RuntimeSamplerNearest;
-   c.mipmap_mode=MALI_MIPMAP_MODE_NEAREST;
+   c.mipmap_mode=sm->mipFilter==A5RuntimeSamplerMipLinear?MALI_MIPMAP_MODE_TRILINEAR:MALI_MIPMAP_MODE_NEAREST;
    c.wrap_mode_s=sm->sAddressMode==A5RuntimeSamplerRepeat?MALI_WRAP_MODE_REPEAT:
     sm->sAddressMode==A5RuntimeSamplerClampBorder?MALI_WRAP_MODE_CLAMP_TO_BORDER:MALI_WRAP_MODE_CLAMP_TO_EDGE;
    c.wrap_mode_t=sm->tAddressMode==A5RuntimeSamplerRepeat?MALI_WRAP_MODE_REPEAT:
     sm->tAddressMode==A5RuntimeSamplerClampBorder?MALI_WRAP_MODE_CLAMP_TO_BORDER:MALI_WRAP_MODE_CLAMP_TO_EDGE;
    c.wrap_mode_r=sm->rAddressMode==A5RuntimeSamplerRepeat?MALI_WRAP_MODE_REPEAT:
     sm->rAddressMode==A5RuntimeSamplerClampBorder?MALI_WRAP_MODE_CLAMP_TO_BORDER:MALI_WRAP_MODE_CLAMP_TO_EDGE;
-   c.minimum_lod=sm->lodMinClamp;
-   c.maximum_lod=(sampler->flags&A5MaliResourceImmutableSampler)?sm->lodMaxClamp:0;
+   c.minimum_lod=fminf(sm->lodMinClamp,(float)(levels-1));
+   c.maximum_lod=levels>1?texture_max_lod(sm,levels):(sampler->flags&A5MaliResourceImmutableSampler)?sm->lodMaxClamp:0;
    c.border_color_r=0;c.border_color_g=0;c.border_color_b=0;c.border_color_a=0;
   }
   unsigned q=FS_SYS+352+32*r->nativeIndex;
-  u32(d,q,1);u32(d,q+4,im->width);u32(d,q+8,im->height);
+  u32(d,q,levels);u32(d,q+4,im->width);u32(d,q+8,im->height);u32(d,q+12,sm->maxAnisotropy);
   f32(d,q+16,sm->lodMinClamp);
-  f32(d,q+20,(sampler->flags&A5MaliResourceImmutableSampler)?sm->lodMaxClamp:0);
+  f32(d,q+20,levels>1?texture_max_lod(sm,levels):(sampler->flags&A5MaliResourceImmutableSampler)?sm->lodMaxClamp:0);
   f32(d,q+24,0); /* immutable/runtime accepted states have zero LOD bias */
  }
  return A5RuntimeOK;
@@ -393,7 +426,7 @@ static int generic_textured_contract(const A5MaliCompiledProfile*p){
 static int dynamic_textured_contract(const A5MaliCompiledProfile*p){
  if(p->profileID!=A5MaliDynamicProfileID||
     !(p->flags&A5MaliProfileDynamicStages)||
-    (p->flags&~(A5MaliProfileDynamicStages|A5MaliProfileDynamicColorVarying|A5MaliProfileSourceOverBlend|A5MaliProfileFramebufferFetch|A5MaliProfileFragmentPosition|A5MaliProfileFragmentNoInputs|A5MaliProfileVertexColorOnly|A5MaliProfileVertexTwoUV|A5MaliProfileFragmentTwoUV|A5MaliProfileFragmentColorOnly|A5MaliProfileFragmentNoTextures|A5MaliProfileScreenBlend|A5MaliProfileRenderState|A5MaliProfileShaderBlend|A5MaliProfileVertexNoColor))||
+    (p->flags&~(A5MaliProfileDynamicStages|A5MaliProfileDynamicColorVarying|A5MaliProfileSourceOverBlend|A5MaliProfileFramebufferFetch|A5MaliProfileFragmentPosition|A5MaliProfileFragmentNoInputs|A5MaliProfileVertexColorOnly|A5MaliProfileVertexTwoUV|A5MaliProfileFragmentTwoUV|A5MaliProfileFragmentColorOnly|A5MaliProfileFragmentNoTextures|A5MaliProfileScreenBlend|A5MaliProfileRenderState|A5MaliProfileShaderBlend|A5MaliProfileVertexNoColor|A5MaliProfileShaderAnisotropy))||
     !(p->flags&A5MaliProfileSourceOverBlend)||p->passCount!=1||!p->passes||
     p->passes[0].passID!=p->profileID||p->passes[0].logicalTarget||
     !p->vertexName||!p->vertexName[0]||!p->fragmentName||!p->fragmentName[0]||
@@ -798,11 +831,12 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
  if(!r->scissorWidth||!r->scissorHeight||r->scissorX>=out->width||r->scissorY>=out->height||
    r->scissorWidth>out->width-r->scissorX||r->scissorHeight>out->height-r->scissorY)return A5RuntimeBounds;
  const A5MaliCompiledShader*vs=&pass->vertex,*fs=&pass->fragment;
- if(!vs->bytes||!fs->bytes||!vs->byteCount||vs->byteCount>(dynamic?0x2000u:0x1000u)||!fs->byteCount||fs->byteCount>(dynamic?0x2000u:0x1000u)||
+ if(!vs->bytes||!fs->bytes||!vs->byteCount||vs->byteCount>(dynamic?0x2000u:0x1000u)||!fs->byteCount||fs->byteCount>(dynamic&&(p->flags&A5MaliProfileShaderAnisotropy)?0x4000u:dynamic?0x2000u:0x1000u)||
    (vs->byteCount&15)||(fs->byteCount&15)||(dynamic?(!shader_tag(vs->firstTag)||!shader_tag(fs->firstTag)):vs->firstTag!=5||fs->firstTag!=5)||vs->tlsBytes||vs->wlsBytes||
    fs->tlsBytes||fs->wlsBytes||!vs->workRegisters||vs->workRegisters>16||!fs->workRegisters||fs->workRegisters>16)return A5RuntimeUnsupported;
  if(dynamic&&(((vs->bytes[0]&15)!=vs->firstTag)||((fs->bytes[0]&15)!=fs->firstTag)))return A5RuntimeUnsupported;
- memcpy(d+VS_CODE,vs->bytes,vs->byteCount);memcpy(d+FS_CODE,fs->bytes,fs->byteCount);
+ unsigned fragmentCode=dynamic&&fs->byteCount>0x2000?BIG_FS_CODE:FS_CODE;
+ memcpy(d+VS_CODE,vs->bytes,vs->byteCount);memcpy(d+fragmentCode,fs->bytes,fs->byteCount);
  unsigned fmt=out->metalPixelFormat==115?2:out->metalPixelFormat==10?1:out->metalPixelFormat==30?3:out->metalPixelFormat==43?4:0;
  framebuffer(d,r->descriptorGPUVA,fmt,out);renderer(d,r->descriptorGPUVA,home,clear,generic_color,generic_textured,p->profileID==604||!!(p->flags&A5MaliProfileDynamicColorVarying),vs->workRegisters,fs->workRegisters,
   p->flags&A5MaliProfileInlineSourceOver?0:r->blend);
@@ -839,7 +873,7 @@ static int encode(const A5RuntimeMiscDraw*m,uint8_t*d){
   rs.properties.uniform_buffer_count=dynamic_ubo_count(p,A5MaliStageVertex);
   MALI_RENDERER_STATE_pack((struct mali_renderer_state_packed*)(d+VS_RSD),&rs);
   MALI_RENDERER_STATE_unpack((const struct mali_renderer_state_packed*)(d+FS_RSD),&rs);
-  rs.shader.shader=r->descriptorGPUVA+FS_CODE+fs->firstTag;
+  rs.shader.shader=r->descriptorGPUVA+fragmentCode+fs->firstTag;
   rs.properties.uniform_buffer_count=dynamic_ubo_count(p,A5MaliStageFragment);
   unsigned count=0;for(unsigned i=0;i<p->resourceCount;i++){
    const A5MaliCompiledResource*r=p->resources+i;

@@ -88,7 +88,7 @@ def main() -> int:
     if generic_source_text.count("NIR_PASS(_,nir,nir_lower_variable_initializers,") != 1:
         raise ValueError("shared backend must lower initializers exactly once")
     generic_source.write_text(generic_source_text)
-    for name in ("misc_resource_lowering.h", "misc_native_rt.h", "misc_dynamic.h"):
+    for name in ("misc_resource_lowering.h", "misc_native_rt.h", "misc_dynamic.h", "misc_anisotropy.h"):
         shutil.copyfile(family_dir / name, integration / name)
     shutil.copyfile(generic_profile, integration / "ios_602_profile.h")
     (integration / "meson.build").write_text(

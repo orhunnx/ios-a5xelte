@@ -16,6 +16,8 @@ pre=r'''
 using IOReturn=int;using IOByteCount=size_t;using vm_offset_t=uintptr_t;using A5GPUClientHeader=A5NativeHeader;
 static constexpr int kIOReturnSuccess=0,kIOReturnUnsupported=1,kIOReturnBadArgument=2,kIOReturnNoMemory=3,kIOReturnUnderrun=4,kIOReturnNotReady=5,kIOReturnNotFound=6;
 static constexpr int kIOMemoryIncoherentIOStore=1,kIOMemoryIncoherentIOFlush=2,kIODirectionOut=0;
+static uint64_t mach_absolute_time(){static uint64_t n;return ++n;}
+static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 static unsigned jobsRun,failAt,failStatus,epochWrites,acquires,acquireFailAt;static uint64_t nextFence;static bool poisoned;
 struct IOLock{bool held=false;};static IOLock gpuLock,clientLock;static IOLock*a5g3d_as1_lock(){return &gpuLock;}
 static void IOLockLock(IOLock*l){assert(!l->held);l->held=true;}static void IOLockUnlock(IOLock*l){assert(l->held);l->held=false;}
