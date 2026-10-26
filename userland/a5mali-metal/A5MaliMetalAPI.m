@@ -1034,18 +1034,10 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
              * typed backend retires every native draw synchronously. */
             [dependencies waitForDependenciesAndMarkExecuting:ticket];
             if(traceTiming)dependenciesAt=A5MaliWallUS();
-            /* Accepted by the real submission worker with its resource
-             * dependencies satisfied. This is scheduling, not a completed
-             * hardware fence; all completion/retirement stays below. */
-            [_condition lock];
-            _status=MTLCommandBufferStatusScheduled;
-            NSArray<MTLCommandBufferHandler> *ready=[_scheduled copy];
-            [_scheduled removeAllObjects];[_condition broadcast];
-            [_condition unlock];
-            [_queue dispatchScheduled:^{
-                for(MTLCommandBufferHandler handler in ready)
-                    handler((id<MTLCommandBuffer>)self);
-            }];
+            /* IOMFB has no producer-fence dependency for an early SwapEnd.
+             * Shared source snapshots are also materialized by this backend.
+             * Keep Scheduled callbacks/acceptance behind terminal execution
+             * until both contracts have an explicit safe handoff. */
             if(![_privateBuffer commitAndWait:&submissionError])
                 submissionError=submissionError?:metalError(kIOReturnError);
             if(traceTiming)executionAt=A5MaliWallUS();
@@ -1095,8 +1087,9 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
         (unsigned long)_drawCalls,(unsigned long)resultStatus,(unsigned)resultError);
     if(diagnose)fprintf(stderr,"A5XELTE Metal commit: cb=%u phase=result status=%lu error=%x submitted=%u\n",
         _diagnosticID,(unsigned long)resultStatus,(unsigned)resultError,submit);
-    /* Kernel fences are still terminal here. Scheduling callbacks were
-     * dispatched before execution, on the same ordered callback target. */
+    /* The terminal fence also guards IOMFB presentation, whose current ABI
+     * has no separate producer-fence dependency. Dispatch scheduled and
+     * completed handlers together only after this real terminal point. */
     if(diagnose)fprintf(stderr,"A5XELTE Metal callbacks: cb=%u phase=queued scheduled=%lu completed=%lu async=%u\n",
         _diagnosticID,(unsigned long)scheduled.count,(unsigned long)completed.count,
         _queue.completionQueue!=nil);
@@ -1119,8 +1112,8 @@ typedef struct {float red,green,blue,alpha;} A5MaliDrawBlendColor;
     }];
 }
 
-/* Wait for acceptance by the dependency-ready submission worker, not its
- * terminal GPU work. Completion still requires real validated fences. */
+/* Until IOMFB carries producer dependencies, the submitted SPI waits for
+ * terminal work as well. Never release the compositor before its pixels. */
 - (BOOL)commitAndWaitUntilSubmitted
 {
     [self commit];
