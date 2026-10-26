@@ -28,6 +28,21 @@ int main(void){
  A5MaliFence f={0};A5NativeQueryResult mapped;
  assert(!A5MaliBeginNativeBatch(&c));for(unsigned i=0;i<11;i++){A5MaliBeginNativeSubmissionTracking();assert(!A5MaliQueryNative(&c,&query,&mapped));assert(!A5MaliSubmitNative(&c,&q,jobs,&f));assert(A5MaliNativeBatchAccepted(&c)&&!f.fragmentFence);}
  assert(queries==1&&batches==1&&counts[0]==8);assert(!A5MaliEndNativeBatch(&c,1,&f));assert(batches==2&&counts[1]==3&&f.fragmentFence==22&&c.call==transport&&!A5MaliNativeSubmissionMayBeActive());
+ /* Different logical ordering/subsets of resident tokens must not end the
+  * group or lose the full cached map. Actual VAs follow tokens, not positions. */
+ unsigned queryBefore=queries,batchBefore=batches;
+ assert(!A5MaliBeginNativeBatch(&c));assert(!A5MaliQueryNative(&c,&query,&mapped));
+ assert(!A5MaliSubmitNative(&c,&q,jobs,&f));
+ A5NativeQueryRequest subset=query;subset.surfaces[0]=query.surfaces[1];subset.surfaces[1]=0;
+ assert(!A5MaliQueryNative(&c,&subset,&mapped)&&mapped.surfaces[0].gpuVA==0x11000000&&!mapped.surfaces[1].token);
+ A5NativeSubmitRequest sub=q;sub.surfaces[0]=subset.surfaces[0];sub.surfaces[1]=0;sub.readSurfaces=0;sub.writeSurfaces=1;
+ assert(!A5MaliSubmitNative(&c,&sub,jobs,&f));
+ A5NativeQueryRequest reverse=query;reverse.surfaces[0]=query.surfaces[1];reverse.surfaces[1]=query.surfaces[0];
+ assert(!A5MaliQueryNative(&c,&reverse,&mapped)&&mapped.surfaces[1].gpuVA==0x10000000);
+ assert(!A5MaliQueryNative(&c,&query,&mapped));assert(!A5MaliSubmitNative(&c,&q,jobs,&f));
+ assert(queries==queryBefore+1&&batches==batchBefore);
+ assert(!A5MaliEndNativeBatch(&c,1,&f)&&batches==batchBefore+1&&counts[batchBefore]==3);
+ clockFence=22;
  assert(!A5MaliBeginNativeBatch(&c));assert(!A5MaliSubmitNative(&c,&q,jobs,&f));unsigned before=batches;size_t z=0;assert(!c.call(c.context,9,NULL,0,NULL,&z));assert(batches==before+1&&mutations==1);assert(!A5MaliEndNativeBatch(&c,1,&f)&&f.fragmentFence==24);
  assert(!A5MaliBeginNativeBatch(&c));assert(!A5MaliSubmitNative(&c,&q,jobs,&f));before=batches;query.surfaces[0]++;assert(!A5MaliQueryNative(&c,&query,&mapped));assert(batches==before+1);assert(!A5MaliEndNativeBatch(&c,1,&f));
  assert(!A5MaliBeginNativeBatch(&c));assert(!A5MaliSubmitNative(&c,&q,jobs,&f));before=batches;assert(!A5MaliEndNativeBatch(&c,0,&f)&&batches==before&&!f.fragmentFence); /* abort never starts pending jobs */

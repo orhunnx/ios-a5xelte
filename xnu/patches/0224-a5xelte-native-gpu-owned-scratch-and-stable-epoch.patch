@@ -1,0 +1,130 @@
+--- a/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPUAS1.cpp
+@@ -11,4 +11,5 @@
+ #include "SweetSurface.h"
+ #include <IOKit/IOLib.h>
++#include <kern/clock.h>
+ #include "A5XELTEGPUPoll.h"
+ #include <pexpert/pexpert.h>
+@@ -574,5 +575,6 @@
+     uint32_t slot, uint32_t jobOffset, A5G3DAS1Completion *completion,
+     uint64_t *fence, bool *started, uint32_t linkedJobOffset,
+-    uint32_t pollBudget = 20000, uint32_t extraJobOffset = UINT32_MAX)
++    uint32_t pollBudget = 20000, uint32_t extraJobOffset = UINT32_MAX,
++    bool nativeHeadersOnly = false, bool nativeContinuation = false)
+ {
+     if (linkedJobOffset &&
+@@ -610,7 +612,12 @@
+         return kAS1SubmitFault;
+     }
+-    if (ctx->jobs->performOperation(kIOMemoryIncoherentIOStore,
++    const uint64_t storeBegin=mach_absolute_time();
++    /* The native continuation has no intervening CPU writes. Its GPU-written
++     * varyings/heap remain GPU-owned; never clean stale CPU aliases over them.
++     * A new draw still overwrites and stores the complete immutable snapshot. */
++    if (!nativeContinuation && ctx->jobs->performOperation(kIOMemoryIncoherentIOStore,
+         0, kAS1JobBytes) != kIOReturnSuccess)
+         return kAS1SubmitIOError;
++    const uint64_t storeEnd=mach_absolute_time();
+     __sync_synchronize();
+     *fence = ++ctx->nextFence;
+@@ -626,4 +633,5 @@
+     *started = true;
+     a5g3d_as1_write(gpu, slotBase + 0x60, 1u);
++    const uint64_t pollBegin=mach_absolute_time();
+     uint32_t jobIRQ = 0, mmuIRQ = 0, gpuIRQ = 0;
+     for (unsigned waitedUS = 0; waitedUS < pollBudget*10u;) {
+@@ -659,9 +667,21 @@
+     if (mmuIRQ || (gpuIRQ & 0x81u) || (jobIRQ & (1u << (slot + 16))))
+         a5g3d_as1_fault_snapshot(gpu, slot, "job-terminal-fault");
+-    /* Retain all GPU-written varyings, polygon data and heap before any
+-     * subsequent stage cleans the entire job BO back to memory. */
+-    if (ctx->jobs->performOperation(kIOMemoryIncoherentIOFlush,
+-        0, kAS1JobBytes) != kIOReturnSuccess)
+-        return kAS1SubmitIOError;
++    const uint64_t pollEnd=mach_absolute_time();
++    uint32_t flushedBytes=0;
++    /* Typed jobs retain their original full-image reconciliation. Native
++     * draws do not read or mutate GPU scratch between stages: only completion
++     * headers are CPU-read, so reconcile those bounded ranges. Fragment then
++     * consumes the original GPU-owned varyings/heap without another CPU store.
++     * The next native draw replaces every byte before its full-image store. */
++    if (nativeHeadersOnly) {
++        const uint32_t headers[] = {jobOffset, linkedJobOffset, extraJobOffset};
++        for (unsigned i=0;i<3;i++) {
++            if ((i==1 && !linkedJobOffset) || headers[i]==UINT32_MAX) continue;
++            if (ctx->jobs->performOperation(kIOMemoryIncoherentIOFlush,
++                headers[i],32) != kIOReturnSuccess) return kAS1SubmitIOError;
++            flushedBytes+=32;
++        }
++    } else if (ctx->jobs->performOperation(kIOMemoryIncoherentIOFlush,
++        0, kAS1JobBytes) != kIOReturnSuccess) return kAS1SubmitIOError;
+     __sync_synchronize();
+     const uint32_t header = *reinterpret_cast<const uint32_t *>(
+@@ -691,4 +711,16 @@
+         return kAS1SubmitFault;
+     *started = false;
++    if(nativeHeadersOnly){
++        static unsigned reports=0;
++        if(++reports<=8 || !(reports&255)){
++            uint64_t storeNS=0,pollNS=0,flushNS=0;
++            absolutetime_to_nanoseconds(storeEnd-storeBegin,&storeNS);
++            absolutetime_to_nanoseconds(pollEnd-pollBegin,&pollNS);
++            absolutetime_to_nanoseconds(mach_absolute_time()-pollEnd,&flushNS);
++            IOLog("A5XELTE G3D native cost: sample=%u slot=%u continuation=%u store_bytes=%u header_bytes=%u store_ns=%llu poll_ns=%llu reconcile_ns=%llu\n",
++                reports,slot,nativeContinuation?1u:0u,nativeContinuation?0u:kAS1JobBytes,flushedBytes,
++                storeNS,pollNS,flushNS);
++        }
++    }
+     return kAS1SubmitCompleted;
+ }
+--- a/iokit/Kernel/arm/A5XELTENativeQueue.inc
++++ b/iokit/Kernel/arm/A5XELTENativeQueue.inc
+@@ -89,8 +89,8 @@
+     if (!clear) status=a5g3d_as1_run_job(ctx,gpu,1,
+         r.vertexOffset,out,&out->tilerFence,&started,r.tilerOffset,200000,
+-        chain==1?A5NativePreloadOffset:UINT32_MAX);
++        chain==1?A5NativePreloadOffset:UINT32_MAX,true,false);
+     if (status==kAS1SubmitCompleted)
+         status=a5g3d_as1_run_job(ctx,gpu,0,r.fragmentOffset,out,
+-            &out->fragmentFence,&started,0,200000);
++            &out->fragmentFence,&started,0,200000,UINT32_MAX,true,!clear);
+     if (status==kAS1SubmitCompleted && flushOutput)
+         for (uint32_t i=0;i<4;i++)
+@@ -147,5 +147,6 @@
+  IOLockUnlock(lock);return result;
+ }
+-/* Same immutable resource bindings for at most eight snapshots. Host aliases
++/* Stable mapping epoch for at most eight snapshots; each item validates its
++ * own resource tokens and physical uses. Host aliases
+  * are cleaned once, GPU jobs run in order, and CPU aliases reconcile at end. */
+ void a5g3d_as1_submit_native_batch(A5G3DAS1Context*ctx,const uint8_t*items,
+--- a/iokit/Kernel/arm/A5XELTENativeClient.inc
++++ b/iokit/Kernel/arm/A5XELTENativeClient.inc
+@@ -206,5 +206,5 @@
+   uint8_t*entry=copy+sizeof(header)+i*stride;A5NativeSubmitRequest r;memcpy(&r,entry,sizeof(r));
+   bool profile=r.profileID==0||(r.profileID>=99&&r.profileID<=108)||(r.profileID>=200&&r.profileID<=208)||(r.profileID>=300&&r.profileID<=302)||r.profileID==500||r.profileID==501||(r.profileID>=600&&r.profileID<=606)||r.profileID==65536;
+-  if(!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&r.header),sizeof(r))||r.reserved||!r.mappingEpoch||r.jobBytes!=A5NativeJobBytes||((r.readSurfaces|r.writeSurfaces|r.readBuffers)&~15u)||!r.writeSurfaces||!profile||!A5NativeSameMapping(&first,&r)||A5NativeCheckJobChain(entry+sizeof(r),r.jobBytes,A5NativeJobVA,r.vertexOffset,r.tilerOffset,r.fragmentOffset,r.profileID==0)<0){kr=kIOReturnBadArgument;break;}
++  if(!a5gpu_valid_header(reinterpret_cast<A5GPUClientHeader*>(&r.header),sizeof(r))||r.reserved||!r.mappingEpoch||r.jobBytes!=A5NativeJobBytes||((r.readSurfaces|r.writeSurfaces|r.readBuffers)&~15u)||!r.writeSurfaces||!profile||!A5NativeSameEpoch(&first,&r)||A5NativeCheckJobChain(entry+sizeof(r),r.jobBytes,A5NativeJobVA,r.vertexOffset,r.tilerOffset,r.fragmentOffset,r.profileID==0)<0){kr=kIOReturnBadArgument;break;}
+   uint32_t reads=0,writes=0,buffers=0;
+   kr=r.mappingEpoch!=fMappingEpoch?kIOReturnNotReady:nativeTokensLocked(r.surfaces,r.buffers,nullptr,r.readSurfaces,r.writeSurfaces,r.readBuffers,&reads,&writes,&buffers);
+--- a/iokit/Kernel/arm/A5XELTENativeABI.h
++++ b/iokit/Kernel/arm/A5XELTENativeABI.h
+@@ -44,5 +44,5 @@
+     uint64_t tilerFence,fragmentFence;
+ } A5NativeSubmitResult;
+-/* At most eight complete snapshots, same mapping/token arrays. Results contain
++/* At most eight complete snapshots, same mapping epoch. Each item validates its own tokens. Results contain
+  * only real terminal fences; completedCount excludes the failed item. */
+ typedef struct { A5NativeHeader header;uint32_t count,reserved; } A5NativeBatchRequest;
+@@ -51,4 +51,10 @@
+     A5NativeSubmitResult items[A5NativeBatchMax];
+ } A5NativeBatchResult;
++/* An epoch is changed by every map/unmap/release mutation. Stable epochs
++ * permit different subsets/orderings of already mapped resources. The kernel
++ * must still validate every item's live tokens and collect physical-use masks. */
++static inline int A5NativeSameEpoch(const A5NativeSubmitRequest *a,const A5NativeSubmitRequest *b){
++ return a->mappingEpoch && a->mappingEpoch==b->mappingEpoch;
++}
+ static inline int A5NativeSameMapping(const A5NativeSubmitRequest *a,const A5NativeSubmitRequest *b){
+  if(a->mappingEpoch!=b->mappingEpoch)return 0;

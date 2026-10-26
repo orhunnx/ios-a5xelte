@@ -8,6 +8,7 @@ typedef struct {
  A5NativeQueryRequest query;A5NativeQueryResult mapped;
  A5MaliFence last; kern_return_t error;
  A5NativeUploadArena arenas[4];unsigned arenaResets,arenaCreates,arenaWrites,arenaReuses,awaitingUploadSubmit;
+ unsigned queryHits,queryBarriers,mutationBarriers,mappingBarriers,capacityFlushes;
  uint64_t stagedBytes;
 } A5NativeBatchSession;
 static _Thread_local A5NativeBatchSession *nativeBatch;
@@ -80,11 +81,31 @@ static kern_return_t a5NativeBatchFlush(void){
  if(r.status){if(r.status==1||r.status==2)submissionMayBeActive=0;return s->error=r.status==1?kIOReturnBadArgument:r.status==2?kIOReturnBusy:r.status==4?kIOReturnTimeout:kIOReturnIOError;}
  submissionMayBeActive=0;return KERN_SUCCESS;
 }
+/* Reorder/subset a previously validated mapping without touching the kernel
+ * mapping epoch. Unknown tokens still flush before Query17 can change PTEs.
+ * Keep the full cached set so a target-only clear does not discard textures. */
+static int a5NativeCachedQuery(A5NativeBatchSession*s,const A5NativeQueryRequest*q,
+ A5NativeQueryResult*out){
+ if(!s->queryValid)return 0;
+ A5NativeQueryResult r=s->mapped;
+ memset(r.surfaces,0,sizeof(r.surfaces));memset(r.buffers,0,sizeof(r.buffers));
+ for(unsigned i=0;i<4;i++){
+  if(q->surfaces[i]){unsigned j=0;while(j<4&&s->mapped.surfaces[j].token!=q->surfaces[i])++j;
+   if(j==4)return 0;r.surfaces[i]=s->mapped.surfaces[j];}
+  if(q->buffers[i]){unsigned j=0;while(j<4&&s->mapped.buffers[j].token!=q->buffers[i])++j;
+   if(j==4)return 0;r.buffers[i]=s->mapped.buffers[j];}
+ }
+ *out=r;return 1;
+}
 static kern_return_t a5NativeBatchTransport(void *context,uint32_t selector,const void *in,size_t bytes,void*out,size_t*size){
  A5NativeBatchSession*s=context;if(s->error)return s->error;
- if(selector==A5NativeQuerySelector&&s->queryValid&&bytes==sizeof(s->query)&&in&&!memcmp(in,&s->query,bytes)&&out&&size&&*size>=sizeof(s->mapped)){
-  memcpy(out,&s->mapped,sizeof(s->mapped));*size=sizeof(s->mapped);return KERN_SUCCESS;
+ if(selector==A5NativeQuerySelector&&bytes==sizeof(s->query)&&in&&out&&size&&*size>=sizeof(s->mapped)){
+  A5NativeQueryRequest q;A5NativeQueryResult r;memcpy(&q,in,sizeof(q));
+  if(q.header.version==1&&q.header.size==sizeof(q)&&!q.header.reserved0&&!q.header.reserved1&&a5NativeCachedQuery(s,&q,&r)){
+   ++s->queryHits;memcpy(out,&r,sizeof(r));*size=sizeof(r);return KERN_SUCCESS;
+  }
  }
+ if(s->count){if(selector==A5NativeQuerySelector)++s->queryBarriers;else ++s->mutationBarriers;}
  kern_return_t kr=a5NativeBatchFlush();if(kr)return kr;s->queryValid=0;
  size_t outputCapacity=size?*size:0;
  kr=s->call(s->context,selector,in,bytes,out,size);
@@ -120,7 +141,9 @@ kern_return_t A5MaliBeginNativeBatch(A5MaliClient*c){
 static kern_return_t a5NativeBatchAppend(const A5NativeSubmitRequest*q,const void*jobs){
  A5NativeBatchSession*s=nativeBatch;if(s->error)return s->error;
  if(s->count){A5NativeSubmitRequest first;memcpy(&first,s->packet+sizeof(A5NativeBatchRequest),sizeof(first));
-  if(s->count==A5NativeBatchMax||!A5NativeSameMapping(&first,q)){kern_return_t kr=a5NativeBatchFlush();if(kr)return kr;}}
+  if(s->count==A5NativeBatchMax||!A5NativeSameEpoch(&first,q)){
+   if(s->count==A5NativeBatchMax)++s->capacityFlushes;else ++s->mappingBarriers;
+   kern_return_t kr=a5NativeBatchFlush();if(kr)return kr;}}
  size_t offset=sizeof(A5NativeBatchRequest)+s->count*(sizeof(*q)+A5NativeJobBytes);
  memcpy(s->packet+offset,q,sizeof(*q));memcpy(s->packet+offset+sizeof(*q),jobs,A5NativeJobBytes);++s->count;s->accepted=1;s->awaitingUploadSubmit=0;return KERN_SUCCESS;
 }
@@ -213,5 +236,8 @@ kern_return_t A5MaliEndNativeBatch(A5MaliClient*c,int commit,A5MaliFence*f){
  if(s->arenaCreates||s->arenaReuses){static unsigned reports;
   if(++reports<=8||!(reports&63)||kr)fprintf(stderr,"A5XELTE Metal upload arena: creates=%u writes=%u resets=%u staged_bytes=%llu result=%x uncertain=%u reused=%u retained=%u\n",s->arenaCreates,s->arenaWrites,s->arenaResets,(unsigned long long)s->stagedBytes,(unsigned)kr,submissionMayBeActive,s->arenaReuses,c->nativeUploadPool?kept:0);
  }
+ {static unsigned reports;if(++reports<=8||!(reports&63)||kr)fprintf(stderr,
+  "A5XELTE Metal native grouping: queries_cached=%u query_barriers=%u mutation_barriers=%u epoch_barriers=%u capacity_flushes=%u result=%x\n",
+  s->queryHits,s->queryBarriers,s->mutationBarriers,s->mappingBarriers,s->capacityFlushes,(unsigned)kr);}
  if(f)*f=s->last;c->call=s->call;c->context=s->context;nativeBatch=NULL;free(s->packet);free(s);return kr;
 }

@@ -38,7 +38,7 @@ static bool a5g3d_queue_acquire_runtime_wait(IOService**o,uint64_t*t,IOBufferMem
 static bool a5g3d_queue_release(IOService*,uint64_t){return true;}
 static void a5g3d_queue_poison(IOService*,uint64_t){poisoned=true;}
 static uint32_t a5g3d_as1_read(vm_offset_t,unsigned r){return r==0x100?3:r==0x140?1:0;}
-static A5G3DAS1SubmitStatus a5g3d_as1_run_job(A5G3DAS1Context*,vm_offset_t,unsigned,uint32_t,A5G3DAS1Completion*,uint64_t*f,bool*started,uint32_t,unsigned,uint32_t=UINT32_MAX){
+static A5G3DAS1SubmitStatus a5g3d_as1_run_job(A5G3DAS1Context*,vm_offset_t,unsigned,uint32_t,A5G3DAS1Completion*,uint64_t*f,bool*started,uint32_t,unsigned,uint32_t=UINT32_MAX,bool=false,bool=false){
  assert(gpuLock.held);++jobsRun;*started=true;if(failAt==jobsRun)return static_cast<A5G3DAS1SubmitStatus>(failStatus);*f=++nextFence;*started=false;return kAS1SubmitCompleted;}
 template<class... T>static void IOLog(const char*,T...){ }
 #include "NATIVE_QUEUE"
@@ -46,7 +46,7 @@ static void*IOMallocData(size_t n){return malloc(n);}static void IOFreeData(void
 static bool a5gpu_valid_header(const A5GPUClientHeader*h,uint32_t bytes){return h&&h->version==1&&h->size==bytes&&!h->reserved0&&!h->reserved1;}
 struct IOExternalMethodArguments{unsigned scalarInputCount=0,scalarOutputCount=0;void*structureOutput=nullptr;void*structureOutputDescriptor=nullptr;size_t structureOutputSize=0;IOMemoryDescriptor*structureInputDescriptor=nullptr;const void*structureInput=nullptr;size_t structureInputSize=0;};
 class A5XELTEGPUUserClient{public:IOLock*fLock=&clientLock;A5G3DAS1Context*fAS1=nullptr;uint32_t fMappingEpoch=1;IOReturn nativeBatch(IOExternalMethodArguments*);
- IOReturn nativeTokensLocked(const uint64_t*s,const uint64_t*,void*,uint32_t r,uint32_t w,uint32_t b,uint32_t*reads,uint32_t*writes,uint32_t*buffers){for(unsigned i=0;i<4;i++)if((r|w)&(1u<<i))if(!s[i])return kIOReturnNotFound;*reads=r;*writes=w;*buffers=b;return 0;}};
+ IOReturn nativeTokensLocked(const uint64_t*s,const uint64_t*,void*,uint32_t r,uint32_t w,uint32_t b,uint32_t*reads,uint32_t*writes,uint32_t*buffers){for(unsigned i=0;i<4;i++)if((r|w)&(1u<<i))if(s[i]!=0x100000001&&s[i]!=0x100000002)return kIOReturnNotFound;*reads=r;*writes=w;*buffers=b;return 0;}};
 '''.replace('NATIVE_ABI',str(arm/'A5XELTENativeABI.h')).replace('NATIVE_QUEUE',str(arm/'A5XELTENativeQueue.inc'))
 body=r'''
 int main(){IOMemoryDescriptor source,target,job(A5NativeJobBytes);SweetSurface src{&source},dst{&target};A5G3DAS1Context ctx{&job};ctx.surface[0]=&src;ctx.surface[1]=&dst;ctx.mappedBytes[0]=ctx.mappedBytes[1]=4096;gAS1Owner=&ctx;
@@ -61,7 +61,9 @@ int main(){IOMemoryDescriptor source,target,job(A5NativeJobBytes);SweetSurface s
  setup();assert(client.nativeBatch(&args)==0);assert(result.completedCount==A5NativeBatchMax&&result.status==0&&jobsRun==2*A5NativeBatchMax&&nextFence==2*A5NativeBatchMax);assert(source.stores==1&&target.stores==1&&target.flushes==1&&!source.flushes&&epochWrites==A5NativeBatchMax);for(unsigned i=0;i<A5NativeBatchMax;i++)assert(result.items[i].fragmentFence==2*(i+1));
  setup();((A5NativeSubmitRequest*)entry(2))->mappingEpoch=2;assert(client.nativeBatch(&args)==kIOReturnBadArgument&&!jobsRun);
  setup();for(unsigned i=0;i<A5NativeBatchMax;i++)((A5NativeSubmitRequest*)entry(i))->mappingEpoch=2;assert(client.nativeBatch(&args)==kIOReturnNotReady&&!jobsRun);
- setup();((A5NativeSubmitRequest*)entry(2))->surfaces[0]++;assert(client.nativeBatch(&args)==kIOReturnBadArgument&&!jobsRun);
+ setup();((A5NativeSubmitRequest*)entry(2))->surfaces[0]=0x200000001;assert(client.nativeBatch(&args)==kIOReturnNotFound&&!jobsRun);
+ setup();{auto*q=(A5NativeSubmitRequest*)entry(2);q->surfaces[0]=0x100000002;q->surfaces[1]=0x100000001;}assert(!client.nativeBatch(&args)&&result.completedCount==A5NativeBatchMax);
+ setup();{auto*q=(A5NativeSubmitRequest*)entry(2);q->surfaces[0]=0;q->readSurfaces=0;}assert(!client.nativeBatch(&args)&&result.completedCount==A5NativeBatchMax);
  setup();((A5NativeSubmitRequest*)entry(2))->header.reserved0=1;assert(client.nativeBatch(&args)==kIOReturnBadArgument&&!jobsRun);
  setup();((uint32_t*)(entry(2)+sizeof(A5NativeSubmitRequest)))[6]=0;assert(client.nativeBatch(&args)==kIOReturnBadArgument&&!jobsRun);
  setup();((A5NativeBatchRequest*)packet.data())->count=A5NativeBatchMax+1;assert(client.nativeBatch(&args)==kIOReturnBadArgument&&!jobsRun);

@@ -43,13 +43,19 @@ typedef struct {
     uint32_t status,reserved;
     uint64_t tilerFence,fragmentFence;
 } A5NativeSubmitResult;
-/* At most eight complete snapshots, same mapping/token arrays. Results contain
+/* At most eight complete snapshots, same mapping epoch. Each item validates its own tokens. Results contain
  * only real terminal fences; completedCount excludes the failed item. */
 typedef struct { A5NativeHeader header;uint32_t count,reserved; } A5NativeBatchRequest;
 typedef struct {
     A5NativeHeader header;uint32_t count,completedCount,status,reserved;
     A5NativeSubmitResult items[A5NativeBatchMax];
 } A5NativeBatchResult;
+/* An epoch is changed by every map/unmap/release mutation. Stable epochs
+ * permit different subsets/orderings of already mapped resources. The kernel
+ * must still validate every item's live tokens and collect physical-use masks. */
+static inline int A5NativeSameEpoch(const A5NativeSubmitRequest *a,const A5NativeSubmitRequest *b){
+ return a->mappingEpoch && a->mappingEpoch==b->mappingEpoch;
+}
 static inline int A5NativeSameMapping(const A5NativeSubmitRequest *a,const A5NativeSubmitRequest *b){
  if(a->mappingEpoch!=b->mappingEpoch)return 0;
  for(unsigned i=0;i<A5NativeSlots;i++)if(a->surfaces[i]!=b->surfaces[i]||a->buffers[i]!=b->buffers[i])return 0;
