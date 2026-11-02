@@ -339,7 +339,12 @@ static void run(NSString *self, NSArray<NSString *> *command, NSString *log)
             if(now-quietSince>=10&&progressBytes==0){
                 NSMutableSet *arrived=[a5RunnableFunctionKeys() mutableCopy];
                 [arrived minusSet:initialPending?:[NSSet set]];
-                if(arrived.count){
+                /* New demand yields immediately. Without new demand, an
+                 * equally idle child may not hold the whole service forever;
+                 * only our own unstarted compiler work is cancelled and the
+                 * request becomes retryable deferred. */
+                BOOL newDemand=arrived.count>0;
+                if(newDemand||now-quietSince>=30){
                     kill(-pid,SIGKILL);
                     pid_t reaped;do{reaped=waitpid(pid,&status,0);}while(reaped<0&&errno==EINTR);
                     if(reaped!=pid)fail(@"cannot reap yielded compiler child");
@@ -349,10 +354,10 @@ static void run(NSString *self, NSArray<NSString *> *command, NSString *log)
                         if(n==0){gone=YES;break;}if(n<0||n>=32)break;usleep(20000);
                     }
                     if(!gone)fail(@"cannot prove yielded compiler group retired");
-                    fprintf(stderr,"A5XELTE shader compiler: YIELD request=%s stage=%s quiet=%.1f new_functions=%lu child_reaped=1\n",
-                        request,stage,now-quietSince,(unsigned long)arrived.count);
+                    fprintf(stderr,"A5XELTE shader compiler: YIELD request=%s stage=%s quiet=%.1f new_functions=%lu fallback=%u child_reaped=1\n",
+                        request,stage,now-quietSince,(unsigned long)arrived.count,newDemand?0U:1U);
                     a5DemandYielded=YES;
-                    @throw [NSException exceptionWithName:@"A5ShaderDemandYield" reason:@"new authenticated function arrived while tool made no user CPU/output progress" userInfo:nil];
+                    @throw [NSException exceptionWithName:@"A5ShaderDemandYield" reason:newDemand?@"new authenticated function arrived while tool made no user CPU/output progress":@"compiler tool made no user CPU/output progress for 30s" userInfo:nil];
                 }
             }
         }

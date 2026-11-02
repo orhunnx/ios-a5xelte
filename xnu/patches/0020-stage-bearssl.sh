@@ -1,7 +1,10 @@
 #!/bin/bash
 # Pinned, portable constant-time AES for the SWEET legacy CBC/ECB API.
 set -euo pipefail
-[[ "${MACHINE_CONFIG:-}" == SWEET ]] || exit 0
+case "${MACHINE_CONFIG:-}" in
+    SWEET|A5XELTE) ;;
+    *) exit 0 ;;
+esac
 [[ -f libkern/crypto/corecrypto_aes.c ]] || exit 1
 bearssl_sha=7bea48e5e850ab4cafbe68d3765cdaba13a86d6f
 bearssl_tmp=$(mktemp -d)

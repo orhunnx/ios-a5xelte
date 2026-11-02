@@ -1086,3 +1086,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - `a5shader-compile` scans report `candidates=126 deferred_old=126 handled=1 maintenance=1 arrivals=0`; no `STAGE PUBLISHED`, `DEFERRED` or `arriving-function` appears. `old-maintenance` tokens advance to `30fa…` (line 5852), then stop; the sampler shows the worker waiting.
 - Hypothesis: 0248's no-progress yield requires a new authenticated function, and status presence excludes retryable deferred requests from the arrival path. The compositor waits for a shader and never submits again. [Readout](docs/a5xelte-0248-readout.md). 0247 rollback image is available; no new BOOT was built or written.
 
+
+## 2026-11-02 — 0249 compiler fallback installed; runtime pending
+
+- The worker now defers a compiler child after 30 s without user CPU/output progress even when no new authenticated function arrives. It still kills/reaps only its own group and writes the existing retryable `deferred` status; no GPU work is cancelled. The BearSSL/HFS stage scripts now also stage for `MACHINE_CONFIG=A5XELTE`.
+- Worker built for iOS ARM64 with 4 KiB signature pages: 199,168 B, SHA-256 `9a5ee40875fbdb42eea99aa076e0329cdbd13eb22c3c04bb3b89b7856cded1af`; zlib 62,750 B. The 0248 BOOT payload was patched in place (worker table, worker blob, Samsung header SHA-1); loader/DTBH/ADT/boot arguments and all other files remain.
+- 0249 BOOT remains 26,720,272 B, SHA-256 `85d850fb52fb546ea08cfcf1a5b51575d086c2c266fe95b128b77b2bc2bfa9b7`. Guarded p10 write and full readback match; no other partition written. UI/FPS and whether the stalled request resumes remain unobserved. [Details](docs/a5xelte-0249-scheduler-fallback.md).
+
