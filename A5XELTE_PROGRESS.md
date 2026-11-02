@@ -1078,3 +1078,11 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - `shim/a5xelte/toolchain.sh` now selects a bare-metal AArch64 toolchain for the loader and both EL1 probes: explicit `CC`/`LD`/`OBJCOPY`, GNU `aarch64-elf-*`, or Homebrew LLVM (`clang --target=aarch64-none-elf`, `ld.lld`, `llvm-objcopy`). The scripts no longer need a Linux VM's `gcc`/`ld`/`objcopy`.
 - On macOS 27.2 with Xcode 27.2, Homebrew LLVM 22.1.8 and LLD 22.1.8, `build-xnu-boot.sh` reproduced the recorded loaders byte-for-byte: 512 MiB 10336 B `522c365351f65f5f7459d03126b3b327c3f755363e11e614ecd69cc6b4efab37`; 736 MiB 10368 B `055a2886aa2146cdba20236da78862d23492eb0415063162915ca00d722c5632`. `build-probe.sh` produced 316 B and `build-probe4k.sh` 20480 B, both with the expected Samsung Image header. Build evidence only; no device, BOOT p10 or partition operation.
 - Commands and limits are in [macOS build notes](docs/a5xelte-build-macos.md).
+
+## 2026-11-02 — 0248 readout: four frames, compiler wait
+
+- Fresh read-only SYSTEM p20 ring: flush #365, 934,664 B / 10,507 lines, no overwrite; TWRP 3.3.0-0, a5xelte. 0248 BOOT remains; no partition write.
+- 4/4 CPUs, 736 MiB and GPU initialization are healthy. Only 4 presents / 2 shown frames at about 5.3 s; the ~1 h ring then holds 1,390 FB snapshots with `swaps=0`, no G3D error and no kernel panic. Last native record is `profile=0` at line 3790; fences 9/10 complete.
+- `a5shader-compile` scans report `candidates=126 deferred_old=126 handled=1 maintenance=1 arrivals=0`; no `STAGE PUBLISHED`, `DEFERRED` or `arriving-function` appears. `old-maintenance` tokens advance to `30fa…` (line 5852), then stop; the sampler shows the worker waiting.
+- Hypothesis: 0248's no-progress yield requires a new authenticated function, and status presence excludes retryable deferred requests from the arrival path. The compositor waits for a shader and never submits again. [Readout](docs/a5xelte-0248-readout.md). 0247 rollback image is available; no new BOOT was built or written.
+
