@@ -33,10 +33,32 @@ with no new demand holds the service indefinitely.
 - Written to BOOT p10 through TWRP, sync exit 0, full 26,720,272-byte readback
   matches the candidate SHA-256. No other partition was written.
 
+## Runtime — 2026-11-02
+
+A second 0249 boot rendered **42 frames at up to 7.5 FPS** before stopping.
+The fallback itself fired twice:
+
+```
+YIELD request=0a3f… stage=metal2vulkan quiet=30.4 new_functions=0 fallback=1
+DEFERRED request=0a3f… retryable=1 published=0
+YIELD request=22d3… stage=metal2vulkan quiet=30.9 new_functions=0 fallback=1
+DEFERRED request=22d3… retryable=1 published=0
+```
+
+The second request is `fixed_frag_lph_cph` (`22d301…`). Its
+`metal2vulkan` child had only about 0.27 ms user CPU and 7.78 ms system CPU at
+24 s, produced no log output, and was deferred at 30.9 s. After the deferral
+backboardd kept reporting `phase=waiting` for the same request and no further
+frame was presented. `PosterBoard` still traps on `selectedLockPath`.
+
+So the scheduler no longer blocks the whole service, but the specific shader
+translation still stalls; deferring it does not produce the publication the
+compositor needs. No kernel panic occurred.
+
 ## Limits
 
-- Runtime behavior, UI recovery and FPS are not yet observed. The 0248 and
-  0247 BOOT images remain available for rollback.
+- The underlying phone `metal2vulkan` stall and the missing publication remain
+  unresolved. The 0248 and 0247 BOOT images remain available for rollback.
 - This fallback does not repair the underlying phone compiler-child stall; it
   prevents one stalled child from holding the whole service.
 - Fresh full-XNU reconstruction from the public patch series still needs the

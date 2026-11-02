@@ -1093,3 +1093,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - Worker built for iOS ARM64 with 4 KiB signature pages: 199,168 B, SHA-256 `9a5ee40875fbdb42eea99aa076e0329cdbd13eb22c3c04bb3b89b7856cded1af`; zlib 62,750 B. The 0248 BOOT payload was patched in place (worker table, worker blob, Samsung header SHA-1); loader/DTBH/ADT/boot arguments and all other files remain.
 - 0249 BOOT remains 26,720,272 B, SHA-256 `85d850fb52fb546ea08cfcf1a5b51575d086c2c266fe95b128b77b2bc2bfa9b7`. Guarded p10 write and full readback match; no other partition written. UI/FPS and whether the stalled request resumes remain unobserved. [Details](docs/a5xelte-0249-scheduler-fallback.md).
 
+
+## 2026-11-02 — 0249 second boot: fallback works, one shader still stalls
+
+- 0249 rendered 42 frames at up to 7.5 FPS (0248: 2 frames). The 30 s fallback fired twice, for `0a3f…` and `22d301…`, with `fallback=1` and retryable `DEFERRED`; the service no longer blocks forever.
+- `22d301…` is the `fixed_frag_lph_cph` request. Its `metal2vulkan` child used only ~0.27 ms user CPU and 7.78 ms system CPU at 24 s, produced no output and was deferred at 30.9 s. Backboardd then kept `phase=waiting` for the same request and no further frame was presented. PosterBoard still traps on `selectedLockPath`; no kernel panic.
+- Remaining blocker is the specific translator stall/publication, not the scheduler. [Details](docs/a5xelte-0249-scheduler-fallback.md).
+
