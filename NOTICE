@@ -1,0 +1,21 @@
+A5XELTE licensing notice
+
+This repository contains work under more than one license.
+
+1. Original A5XELTE code
+   MIT License, Copyright (c) 2026 orhunnx and A5XELTE contributors.
+   See LICENSE.
+
+2. ios-sweet donor code
+   This repository is a fork of dipa-studio/ios-sweet. Files retained from
+   that project remain under its MIT License, Copyright (c) 2026 dipa-studio.
+   See LICENSES/MIT-ios-sweet.txt.
+
+3. XNU patches and Apple-derived code
+   The patch series under xnu/patches/ modifies Apple's XNU source and is
+   distributed under the Apple Public Source License 2.0.
+   See LICENSES/APSL-2.0.txt. Files copied from other Apple open-source
+   releases remain under their original Apple license.
+
+Apple iOS userland, firmware, IPSW contents and other Apple binaries are not
+distributed in this repository.
