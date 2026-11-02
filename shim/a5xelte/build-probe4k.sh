@@ -3,13 +3,11 @@
 set -eu
 cd "$(dirname "$0")"
 mkdir -p out4k
-: "${CC:=gcc}"
-: "${LD:=ld}"
-: "${OBJCOPY:=objcopy}"
-"${CC}" -c -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -nostdlib \
+. ./toolchain.sh
+"${CC}" $A5_TARGET_FLAGS -c -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -nostdlib \
     -fno-asynchronous-unwind-tables \
     -mgeneral-regs-only -march=armv8-a probe4k.S -o out4k/probe4k.o
-"${CC}" -c -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -nostdlib \
+"${CC}" $A5_TARGET_FLAGS -c -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -nostdlib \
     -fno-asynchronous-unwind-tables -Wall -Wextra -Werror \
     -mgeneral-regs-only -march=armv8-a -O2 mmu4k.c -o out4k/mmu4k.o
 "${LD}" -static -T probe4k.ld --build-id=none out4k/probe4k.o out4k/mmu4k.o \

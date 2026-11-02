@@ -3,10 +3,8 @@
 set -eu
 cd "$(dirname "$0")"
 mkdir -p out
-: "${CC:=gcc}"
-: "${LD:=ld}"
-: "${OBJCOPY:=objcopy}"
-"$CC" -c -ffreestanding -nostdlib -mgeneral-regs-only -march=armv8-a probe.S -o out/probe.o
+. ./toolchain.sh
+"$CC" $A5_TARGET_FLAGS -c -ffreestanding -nostdlib -mgeneral-regs-only -march=armv8-a probe.S -o out/probe.o
 "$LD" -T probe.ld --build-id=none out/probe.o -o out/probe.elf
 "$OBJCOPY" -O binary out/probe.elf out/Image
 python3 - <<'PY'
