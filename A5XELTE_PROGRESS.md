@@ -1100,3 +1100,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - `22d301…` is the `fixed_frag_lph_cph` request. Its `metal2vulkan` child used only ~0.27 ms user CPU and 7.78 ms system CPU at 24 s, produced no output and was deferred at 30.9 s. Backboardd then kept `phase=waiting` for the same request and no further frame was presented. PosterBoard still traps on `selectedLockPath`; no kernel panic.
 - Remaining blocker is the specific translator stall/publication, not the scheduler. [Details](docs/a5xelte-0249-scheduler-fallback.md).
 
+
+## 2026-11-02 — 0249 lock screen and performance readout
+
+- The lock screen appears and touch works. One 0249 window rendered 42 frames at 7.5 FPS (0248: two frames). The 30 s fallback fired for `0a3f…` and `22d301…`; both `metal2vulkan` children produced no output, and backboardd still waits on `22d301…`.
+- Framebuffer copy is 6.3 ms average; one sampled native job took 189 ms (156 one-millisecond sleeps), against 9.27 ms for the next sample. GPU remains `mux=1 div=0x32` (~133 MHz inferred) at 900 mV; no OPP or render-pass merger exists.
+- Remaining work is ordered as: remove the 30 s request stalls, validate a GPU OPP step, then merge compatible draws into real passes. [Readout](docs/a5xelte-0249-performance-readout.md).
+
