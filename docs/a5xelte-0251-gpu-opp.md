@@ -25,6 +25,15 @@ Reference OPP table: [exynos7580-a5xelte-gpu.dts](../../mainline/exynos7580-a5xe
   is well below the DT's 1.0875 V for the 440 MHz point. Treat 400 MHz as an
   experiment until the PMIC rail is independently measured.
 
+## 0252 measured — 2026-11-03
+
+- `clock final div=0x30` (400 MHz) confirmed.
+- Best window: **46 frames / 8.4 FPS**; 200 MHz gave 3.5 FPS and 133 MHz 2.9.
+- BUCK4 still reads back **900 mV**, not 1.0875 V. No kernel panic.
+- After a successful `fixed_frag_lph_cph` publication, `a5shader-compile` was
+  killed with SIGKILL at `retire-prepare-begin` and restarted by launchd. This
+  needs a bounded retirement/memory fix; it is separate from the clock.
+
 ## Limits
 
 - The simple TOP-parent path tops out at 400 MHz. 668/734/800 MHz need the

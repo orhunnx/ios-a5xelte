@@ -1114,3 +1114,9 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - 0252 selects `div=0x30` (400 MHz, TOP path maximum) and writes BUCK4 `0x6e` (1.0875 V nominal). It is installed with readback SHA-256 `18e5828b…`; runtime pending.
 - 668/734/800 MHz require the GPU PLL/parent sequence; the TOP divider path cannot reach them. [OPP record](docs/a5xelte-0251-gpu-opp.md).
 
+
+## 2026-11-03 — 400 MHz measured: 8.4 FPS, worker retirement SIGKILL
+
+- 0252 confirmed `div=0x30` (400 MHz). Best window 46 frames / 8.4 FPS; 200 MHz 3.5, 133 MHz 2.9. BUCK4 still reads 900 mV; no kernel panic.
+- After a successful `fixed_frag_lph_cph` publication, `a5shader-compile` received SIGKILL at `retire-prepare-begin` and was restarted by launchd. The retirement path needs a bounded-memory review. [OPP record](docs/a5xelte-0251-gpu-opp.md).
+
