@@ -28,7 +28,13 @@ BUCK4: 1,243,750 uV -> selector 0x87
 
 The 0255 test kernel writes the PLL, waits for lock, selects PLL parent and
 divider 0x50, and raises BUCK4 to 0x87. The MIF/interconnect votes are not yet
-raised to 825/400 MHz; that remains a required follow-up. Runtime is pending.
+raised to 825/400 MHz.
+
+**0255 measured:** `mux=00000000 div=00000050`, status 1 — the PLL parent and
+800 MHz divider locked, no kernel panic. Best window was 8.3 FPS, below 400 MHz
+(10.2 FPS loaded, 24.2 FPS light), consistent with the missing 825/400 MHz
+memory/interconnect votes. 800 MHz is therefore not a win until those votes
+are ported. 0254 remains the bounded-retirement fallback.
 
 ## Limits
 

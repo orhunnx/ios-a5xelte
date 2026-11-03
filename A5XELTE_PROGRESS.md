@@ -1140,3 +1140,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - 0254 disables the old retirement path and adds a bounded archive cleanup (retain 64, remove at most 32 per call, once per 128 scans). Worker SHA-256 `83be940e…`, BOOT `71b41010…`.
 - 800 MHz candidate from `clk-exynos7580-g3d.c`: PLL2551x m=400 p=13 s=0, MUX index0, divider 0x50, BUCK4 0x87. Candidate built; MIF/interconnect 825/400 votes are still missing; runtime pending. [Record](docs/a5xelte-0254-bounded-retirement.md).
 
+
+## 2026-11-03 — 0255: 800 MHz PLL locks, but memory-bound
+
+- `clock final mux=00000000 div=00000050`, status 1: PLL2551x parent at 800 MHz, no panic.
+- Best window 8.3 FPS, below 400 MHz (10.2 loaded). MIF/interconnect are still 416/200, not the required 825/400; 800 is memory-bound until those votes are ported.
+- 0254 remains the bounded-retirement fallback; 0253 was the fastest light-window result (24.2 FPS).
+
