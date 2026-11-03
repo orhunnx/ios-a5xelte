@@ -36,6 +36,11 @@ raised to 825/400 MHz.
 memory/interconnect votes. 800 MHz is therefore not a win until those votes
 are ported. 0254 remains the bounded-retirement fallback.
 
+**0256 measured (668 MHz):** `mux=00000000 div=00000040`, PLL locked, no
+panic. Best window 5.5 FPS, below 400 MHz (10.2 loaded) and 800 (8.3). The
+668 MHz core without 825/400 MHz MIF/interconnect votes is not a win; p10 was
+restored to 0254 (400 MHz).
+
 ## Limits
 
 The 800 MHz candidate is not validated. The 400 MHz 0254 image remains the

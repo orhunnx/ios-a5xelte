@@ -1147,3 +1147,9 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - Best window 8.3 FPS, below 400 MHz (10.2 loaded). MIF/interconnect are still 416/200, not the required 825/400; 800 is memory-bound until those votes are ported.
 - 0254 remains the bounded-retirement fallback; 0253 was the fastest light-window result (24.2 FPS).
 
+
+## 2026-11-03 — 0256: 668 MHz below 400
+
+- 668 MHz PLL locked: `mux=00000000 div=00000040`, no panic. Best window 5.5 FPS, below 400 MHz (10.2 loaded) and 800 (8.3).
+- Without the 825/400 MHz MIF/interconnect votes, lower core OPPs do not help. p10 restored to 0254 (400 MHz + bounded retirement) SHA-256 `71b41010…`.
+
