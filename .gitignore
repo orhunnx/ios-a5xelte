@@ -4,6 +4,7 @@ dtb/
 recovery/
 # third-party/Apple sources fetched for reading
 research/
+userland/a5xelte-air-translation/ios/a5shader_embedded_publications.inc
 *.ipsw
 shim/out/
 xnu/out/

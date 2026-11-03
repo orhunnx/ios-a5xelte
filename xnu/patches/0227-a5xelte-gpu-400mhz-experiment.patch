@@ -1,0 +1,35 @@
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -155,14 +155,14 @@
+             service->setProperty("A5G3DJobResult", "top-mux-timeout");
+             return false;
+         }
+-        a5g3d_write32(cmu, 0x600, (divider & ~0x77u) | 0x32u);
++        a5g3d_write32(cmu, 0x600, (divider & ~0x77u) | 0x30u);
+         for (us = 0; us < 10000 && (a5g3d_read32(cmu, 0x700) & 0x11u); ++us)
+             IODelay(1);
+         mux = a5g3d_read32(cmu, 0x208);
+         divider = a5g3d_read32(cmu, 0x600);
+         IOLog("A5XELTE G3D: clock final mux=%08x div=%08x status=%08x/%08x\n",
+             mux, divider, a5g3d_read32(cmu, 0x408), a5g3d_read32(cmu, 0x700));
+-        if (us == 10000 || (mux & 1) != 1 || (divider & 0x77u) != 0x32u) {
++        if (us == 10000 || (mux & 1) != 1 || (divider & 0x77u) != 0x30u) {
+             service->setProperty("A5G3DJobResult", "safe-clock-unverified");
+             return false;
+         }
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -209,9 +209,9 @@
+ 	    selector, 400000u + (unsigned)selector * 6250u, enable);
+ 	/* The reference regulator allows changing selector only. Do not touch
+ 	 * the external-enable bits or any other PMIC rail. */
+-	if (selector != 0x50 && !a5pmic_write(hsi, 0x21, 0x50))
++	if (selector != 0x6e && !a5pmic_write(hsi, 0x21, 0x6e))
+ 		goto out;
+-	if (!a5pmic_read(hsi, 0x21, &check) || check != 0x50) {
++	if (!a5pmic_read(hsi, 0x21, &check) || check != 0x6e) {
+ 		printf("A5XELTE G3D: BUCK4 900mV readback failed %#x\n", check);
+ 		goto out;
+ 	}

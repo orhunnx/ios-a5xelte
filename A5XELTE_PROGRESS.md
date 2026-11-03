@@ -1107,3 +1107,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - Framebuffer copy is 6.3 ms average; one sampled native job took 189 ms (156 one-millisecond sleeps), against 9.27 ms for the next sample. GPU remains `mux=1 div=0x32` (~133 MHz inferred) at 900 mV; no OPP or render-pass merger exists.
 - Remaining work is ordered as: remove the 30 s request stalls, validate a GPU OPP step, then merge compatible draws into real passes. [Readout](docs/a5xelte-0249-performance-readout.md).
 
+
+## 2026-11-03 — 200 MHz measured, 400 MHz installed; PMIC voltage unresolved
+
+- 0251 selected `div=0x31` (200 MHz). The BUCK4 selector write read back 900 mV, not the requested 987.5 mV. One boot reached 3.5 FPS (133 MHz: 2.9). No panic.
+- 0252 selects `div=0x30` (400 MHz, TOP path maximum) and writes BUCK4 `0x6e` (1.0875 V nominal). It is installed with readback SHA-256 `18e5828b…`; runtime pending.
+- 668/734/800 MHz require the GPU PLL/parent sequence; the TOP divider path cannot reach them. [OPP record](docs/a5xelte-0251-gpu-opp.md).
+

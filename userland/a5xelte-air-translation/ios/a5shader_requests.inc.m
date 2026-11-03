@@ -873,6 +873,30 @@ static void a5CompileDynamic(NSString *self,NSDictionary *request,NSDictionary *
     activeRequestKey=key;
     activeDynamicRequest=[request copy];
     serviceCheckpoint("dispatch",key,stage);
+#ifdef A5_DIAG_SHADER_DUMP
+    /* Bounded one-time request capture for fixed_frag_lph_cph diagnostics. */
+    static NSMutableSet *dumpSeen;
+    if(!dumpSeen)dumpSeen=[NSMutableSet set];
+    if([request[@"function"] isEqual:@"fixed_frag_lph_cph"]&&
+        dumpSeen.count<8&&![dumpSeen containsObject:key]){
+        [dumpSeen addObject:key];
+        NSData *dumpData=a5Canonical(request);
+        if(dumpData){
+            NSString *encoded=[dumpData base64EncodedStringWithOptions:0];
+            fprintf(stderr,"A5DUMP BEGIN request=%s function=%s stage=%s bytes=%lu\n",
+                key.UTF8String,[request[@"function"] UTF8String],stage.UTF8String,
+                (unsigned long)dumpData.length);
+            for(NSUInteger offset=0;offset<encoded.length;offset+=96){
+                NSUInteger length=encoded.length-offset<96?encoded.length-offset:96;
+                fprintf(stderr,"A5DUMP %04lu %s\n",
+                    (unsigned long)(offset/96),
+                    [[encoded substringWithRange:NSMakeRange(offset,length)] UTF8String]);
+            }
+            fprintf(stderr,"A5DUMP END request=%s\n",key.UTF8String);
+            fflush(stderr);
+        }
+    }
+#endif
     NSString *work=[cacheRoot stringByAppendingPathComponent:
         [@".stage-work-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     serviceCheckpoint("workspace-mkdir-begin",key,stage);
@@ -986,6 +1010,42 @@ static void a5CompileDynamic(NSString *self,NSDictionary *request,NSDictionary *
         stage.UTF8String,[request[@"function"] UTF8String],(unsigned long)native.length,key.UTF8String);
 }
 
+/* 1 when the exact root-private status for key is the retryable deferred
+ * marker. A missing status returns 0. Invalid status files fail closed. */
+static BOOL a5RequestStatusIsDeferred(NSString *key)
+{
+    NSString *folder=[cacheRoot stringByAppendingPathComponent:@"request-status"];
+    int directory=open(folder.fileSystemRepresentation,
+        O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if(directory<0){if(errno==ENOENT)return NO;
+        fail(@"untrusted request status directory");}
+    struct stat st;
+    if(fstat(directory,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=geteuid()||
+        (st.st_mode&07777)!=0700)fail(@"untrusted request status directory");
+    NSString *name=[key stringByAppendingString:@".json"];
+    int fd=openat(directory,name.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    if(fd<0){int saved=errno;close(directory);
+        if(saved==ENOENT)return NO;fail(@"untrusted existing request status");}
+    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=geteuid()||st.st_nlink!=1||
+        (st.st_mode&07777)!=0600||st.st_size<=0||st.st_size>16384){
+        close(fd);close(directory);fail(@"untrusted existing request status");}
+    NSMutableData *bytes=[NSMutableData dataWithLength:(NSUInteger)st.st_size];
+    uint8_t *cursor=bytes.mutableBytes;size_t left=bytes.length;
+    while(left){ssize_t n=read(fd,cursor,left);if(n<0&&errno==EINTR)continue;
+        if(n<=0){close(fd);close(directory);fail(@"short existing request status read");}
+        cursor+=n;left-=(size_t)n;}
+    uint8_t extra;
+    if(read(fd,&extra,1)!=0){close(fd);close(directory);fail(@"existing request status size changed");}
+    close(fd);close(directory);
+    NSDictionary *record=[NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL];
+    if(!a5ExactKeys(record,@[@"schema",@"request_id",@"status",@"reason"])||
+        ![record[@"schema"] isEqual:@1]||![record[@"request_id"] isEqual:key]||
+        ![record[@"status"] isKindOfClass:NSString.class]||
+        ![record[@"reason"] isKindOfClass:NSString.class])
+        fail(@"untrusted existing request status identity");
+    return [record[@"status"] isEqual:@"deferred"];
+}
+
 /* An earlier unsupported request may become executable after a compiler
  * upgrade. Retry only an exact606 pair or a complete validated dynamic-stage
  * request. Status files remain root-private, bounded and non-linkable;
@@ -1091,8 +1151,9 @@ static NSSet<NSString *> *a5RunnableFunctionKeys(void)
             if(leaf.length!=77||![leaf hasSuffix:@".request.json"])continue;
             NSString *key=[leaf substringToIndex:64];if(!a5HexDigest(key))continue;
             count++;remaining--;if([key isEqual:activeRequestKey])continue;
-            if([NSFileManager.defaultManager fileExistsAtPath:[publishedRoot stringByAppendingPathComponent:key]]||
-               [NSFileManager.defaultManager fileExistsAtPath:[[cacheRoot stringByAppendingPathComponent:@"request-status"]stringByAppendingPathComponent:[key stringByAppendingString:@".json"]]])continue;
+            if([NSFileManager.defaultManager fileExistsAtPath:[publishedRoot stringByAppendingPathComponent:key]])continue;
+            if([NSFileManager.defaultManager fileExistsAtPath:[[cacheRoot stringByAppendingPathComponent:@"request-status"]stringByAppendingPathComponent:[key stringByAppendingString:@".json"]]]&&
+               !a5RequestStatusIsDeferred(key))continue;
             NSData *bytes=a5ReadRequest(lane,entry->d_name,uid);
             NSDictionary *r=bytes?[NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL]:nil;
             if(![r isKindOfClass:NSDictionary.class]||![r[@"request_id"]isEqual:key]||![r[@"owner_uid"]isEqual:@(uid)]||
@@ -1161,8 +1222,9 @@ static unsigned a5DispatchArrivingFunctions(NSString *self,NSArray *profiles,int
             NSString *publication=[publishedRoot stringByAppendingPathComponent:key];
             NSString *status=[[cacheRoot stringByAppendingPathComponent:@"request-status"]
                 stringByAppendingPathComponent:[key stringByAppendingString:@".json"]];
-            if([NSFileManager.defaultManager fileExistsAtPath:publication]||
-                [NSFileManager.defaultManager fileExistsAtPath:status])continue;
+            if([NSFileManager.defaultManager fileExistsAtPath:publication])continue;
+            if([NSFileManager.defaultManager fileExistsAtPath:status]&&
+                !a5RequestStatusIsDeferred(key))continue;
             NSData *bytes=a5ReadRequest(dir,entry->d_name,uid);
             NSDictionary *request=bytes?[NSJSONSerialization JSONObjectWithData:bytes options:0 error:NULL]:nil;
             if(![request isKindOfClass:NSDictionary.class]||![request[@"request_id"] isEqual:key]||
@@ -1232,7 +1294,8 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
             NSString *status=[[cacheRoot stringByAppendingPathComponent:@"request-status"]
                 stringByAppendingPathComponent:[key stringByAppendingString:@".json"]];
             if([NSFileManager.defaultManager fileExistsAtPath:publication]||
-                [NSFileManager.defaultManager fileExistsAtPath:status])[oldNames addObject:meta];
+                ([NSFileManager.defaultManager fileExistsAtPath:status]&&
+                 !a5RequestStatusIsDeferred(key)))[oldNames addObject:meta];
             else [urgentNames addObject:meta];
         }
         if(count==64)capped++;
@@ -1320,10 +1383,18 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
     }
 }
 
+#if __has_include("a5shader_embedded_publications.inc")
+#include "a5shader_embedded_publications.inc"
+#define A5_EMBEDDED_PUBLICATION 1
+#endif
+
 static void a5Serve(NSString *self)
 {
     serviceCheckpoint("serve-roots-begin",nil,nil);
     a5PrepareRequestRoots();
+#ifdef A5_EMBEDDED_PUBLICATION
+    a5InstallEmbeddedPublication();
+#endif
     serviceCheckpoint("serve-roots-end",nil,nil);
     NSMutableArray<NSDictionary *> *knownProfiles = [NSMutableArray array];
     serviceCheckpoint("stock-read-begin",nil,nil);
