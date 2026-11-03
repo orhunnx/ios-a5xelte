@@ -1160,3 +1160,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - PMIC HSI2C timed out immediately; touch/PMIC reads failed. FPS stayed 10.2, no gain.
 - p10 restored to 0254 (400 MHz, bounded retirement, touch works). Direct MIF5 write is unsafe; needs the full downstream MIF DVFS sequence. [Record](docs/a5xelte-0257-mif-port.md).
 
+
+## 2026-11-03 — 0259: MIF core /2 works, touch restored, still below 400
+
+- MIF PLL 825 with core /2 (412.5) and fix-100 /8: `div=00007711`; touch/HID works, no PMIC timeout.
+- GPU 668 reached 6.8 FPS, below 400 (10.2). MIF core /1 hangs, so the full 825 bus is unusable; 668/800 stay memory-starved.
+- p10 restored to 0254 (400 MHz).
+

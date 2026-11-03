@@ -22,3 +22,20 @@ restored to 0254 (400 MHz, touch working).
 The direct MIF5 write is not a safe port: HSI2C/PMIC share this CMU and the
 divider/mux sequence needs the downstream CCF/DVFS ordering, not a single
 PLL+divider write. Do not repeat this write without the full MIF DVFS sequence.
+
+## 0259 — MIF core /2, touch restored
+
+0258 used MIF core /1 (825 MHz bus) and hung before the console. 0259 keeps
+the MIF PLL at 825 MHz but divides the bus by 2 (412.5 MHz) and the fix-100
+HSI2C3/PMIC branch by 8:
+
+```
+A5XELTE G3D: MIF 825 pll=a03390d1 mux=00000100 div=00007711
+A5XELTE G3D: clock final mux=00000000 div=00000040
+```
+
+Touch works again (HID touch events, no PMIC HSI2C timeout). GPU 668 MHz
+reached 6.8 FPS, still below 400 MHz (10.2). The 825 MHz MIF bus itself is not
+usable (core /1 hangs); only the /2 bus is stable, so 668/800 remain
+memory-starved. p10 was restored to 0254 (400 MHz).
+
