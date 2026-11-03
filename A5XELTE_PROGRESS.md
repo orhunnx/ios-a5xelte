@@ -1120,3 +1120,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - 0252 confirmed `div=0x30` (400 MHz). Best window 46 frames / 8.4 FPS; 200 MHz 3.5, 133 MHz 2.9. BUCK4 still reads 900 mV; no kernel panic.
 - After a successful `fixed_frag_lph_cph` publication, `a5shader-compile` received SIGKILL at `retire-prepare-begin` and was restarted by launchd. The retirement path needs a bounded-memory review. [OPP record](docs/a5xelte-0251-gpu-opp.md).
 
+
+## 2026-11-03 — 0253: retirement isolated; BUCK4 log corrected
+
+- 400 MHz at 1.0875 V: selector check `0x6e` passed; the `900000 uV` line was hardcoded, not measured. Best window remained 8.4 FPS.
+- `a5shader-compile` SIGKILL at `retire-prepare-begin` is isolated with `A5_DISABLE_RETIREMENT`. 0253 worker SHA-256 `b24642c8…`, BOOT `c171871a…`, p10 readback matched; runtime pending.
+- Proper bounded/asynchronous retirement still needs to replace the temporary disable.
+

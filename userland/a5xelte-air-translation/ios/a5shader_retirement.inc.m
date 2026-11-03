@@ -203,6 +203,10 @@ static void (*a5RetireAfterClaim)(int,const char *);
 #endif
 static BOOL a5RetireCompletedRequest(int directory,const char *name,uid_t uid,NSData *scanned,
                                     NSDictionary *request,NSArray *knownProfiles){
+#ifdef A5_DISABLE_RETIREMENT
+ (void)directory;(void)name;(void)uid;(void)scanned;(void)request;(void)knownProfiles;
+ return NO;
+#endif
  NSString *key=request[@"request_id"];struct stat ds;
  if(fstat(directory,&ds)||!S_ISDIR(ds.st_mode)||ds.st_uid!=uid||(ds.st_mode&07777)!=0700||
     !a5RetireRequest(request,scanned,uid,key)||

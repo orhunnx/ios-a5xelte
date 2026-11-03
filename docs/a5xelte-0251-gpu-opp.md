@@ -29,10 +29,14 @@ Reference OPP table: [exynos7580-a5xelte-gpu.dts](../../mainline/exynos7580-a5xe
 
 - `clock final div=0x30` (400 MHz) confirmed.
 - Best window: **46 frames / 8.4 FPS**; 200 MHz gave 3.5 FPS and 133 MHz 2.9.
-- BUCK4 still reads back **900 mV**, not 1.0875 V. No kernel panic.
+- The `BUCK4 readback 900000 uV` line is hardcoded in
+  `a5xelte_touch.c`; it is not a measurement. The selector check `0x6e`
+  passed, so the 1.0875 V selector write was accepted. No kernel panic.
 - After a successful `fixed_frag_lph_cph` publication, `a5shader-compile` was
-  killed with SIGKILL at `retire-prepare-begin` and restarted by launchd. This
-  needs a bounded retirement/memory fix; it is separate from the clock.
+  killed with SIGKILL at `retire-prepare-begin` and restarted by launchd.
+- 0253 disables the retirement path at compile time
+  (`A5_DISABLE_RETIREMENT`) to isolate the SIGKILL; worker SHA-256
+  `b24642c8…`, BOOT SHA-256 `c171871a…`, p10 readback matched.
 
 ## Limits
 
