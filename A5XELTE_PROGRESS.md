@@ -1127,3 +1127,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - `a5shader-compile` SIGKILL at `retire-prepare-begin` is isolated with `A5_DISABLE_RETIREMENT`. 0253 worker SHA-256 `b24642c8…`, BOOT `c171871a…`, p10 readback matched; runtime pending.
 - Proper bounded/asynchronous retirement still needs to replace the temporary disable.
 
+
+## 2026-11-03 — 0253: retirement disabled, 24.2 FPS
+
+- With `A5_DISABLE_RETIREMENT`, 0253 reached **139 frames / 24.2 FPS** (400 MHz). No `a5shader-compile` crash, no YIELD/DEFERRED/RETIRED.
+- The retirement path was the dominant stall and SIGKILL source. Keeping it disabled is a workaround; the cache grows until a bounded/asynchronous retirement replaces it.
+- SpringBoard still SIGTRAPs; driverkitd remains. No kernel panic. [OPP record](docs/a5xelte-0251-gpu-opp.md).
+

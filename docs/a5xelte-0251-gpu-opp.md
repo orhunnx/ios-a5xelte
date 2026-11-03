@@ -37,6 +37,9 @@ Reference OPP table: [exynos7580-a5xelte-gpu.dts](../../mainline/exynos7580-a5xe
 - 0253 disables the retirement path at compile time
   (`A5_DISABLE_RETIREMENT`) to isolate the SIGKILL; worker SHA-256
   `b24642c8…`, BOOT SHA-256 `c171871a…`, p10 readback matched.
+- 0253 runtime: **139 frames / 24.2 FPS**, zero `a5shader-compile` crashes,
+  no YIELD/DEFERRED/RETIRED. The retirement path was the dominant stall and
+  SIGKILL source. SpringBoard still SIGTRAPs separately.
 
 ## Limits
 
