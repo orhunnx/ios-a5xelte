@@ -1153,3 +1153,10 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - 668 MHz PLL locked: `mux=00000000 div=00000040`, no panic. Best window 5.5 FPS, below 400 MHz (10.2 loaded) and 800 (8.3).
 - Without the 825/400 MHz MIF/interconnect votes, lower core OPPs do not help. p10 restored to 0254 (400 MHz + bounded retirement) SHA-256 `71b41010…`.
 
+
+## 2026-11-03 — 0257: direct MIF 825 breaks PMIC HSI2C; reverted to 0254
+
+- MIF PLL 825 locked (`a03390d1`, m=825 p=13 s=1) with MIF5 select/mux and /1 divider, GPU 668 (`div=0x40`).
+- PMIC HSI2C timed out immediately; touch/PMIC reads failed. FPS stayed 10.2, no gain.
+- p10 restored to 0254 (400 MHz, bounded retirement, touch works). Direct MIF5 write is unsafe; needs the full downstream MIF DVFS sequence. [Record](docs/a5xelte-0257-mif-port.md).
+
