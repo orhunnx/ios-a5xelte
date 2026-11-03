@@ -5,6 +5,52 @@
  * files total<=8MiB, plus one bounded claim retained across interruption.
  */
 enum { A5RetireMax=128*1024,A5RetireSlots=64 };
+#include <stdlib.h>
+#include <string.h>
+
+/* Best-effort bounded cleanup of the completed-request archive. The old
+ * claim/lock/snapshot retirement path could stall or be killed on HFS; this
+ * only removes the oldest regular archive leaves, at most 32 per call, with a
+ * single directory fsync. Active request spools and publications are untouched. */
+struct a5_cleanup_entry { char name[256]; time_t mtime; };
+static int a5_cleanup_order(const void *a,const void *b){
+    const struct a5_cleanup_entry *x=a,*y=b;
+    return x->mtime<y->mtime?-1:x->mtime>y->mtime?1:0;
+}
+static void a5BoundedArchiveCleanup(void)
+{
+    NSString *path=[cacheRoot stringByAppendingPathComponent:@"completed-requests"];
+    int dir=open(path.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if(dir<0)return;
+    DIR *list=fdopendir(dup(dir));
+    if(!list){close(dir);return;}
+    struct a5_cleanup_entry entries[512];
+    unsigned count=0,total=0;struct dirent *e;
+    while((e=readdir(list))){
+        if(e->d_name[0]=='.')continue;
+        struct stat st;
+        if(fstatat(dir,e->d_name,&st,AT_SYMLINK_NOFOLLOW)||!S_ISREG(st.st_mode))continue;
+        total++;
+        if(count<512){
+            strncpy(entries[count].name,e->d_name,sizeof(entries[count].name)-1);
+            entries[count].name[sizeof(entries[count].name)-1]=0;
+            entries[count].mtime=st.st_mtime;
+            count++;
+        }
+    }
+    closedir(list);
+    if(total<=64){close(dir);return;}
+    qsort(entries,count,sizeof(entries[0]),a5_cleanup_order);
+    unsigned remove=total-64;if(remove>32)remove=32;
+    unsigned removed=0;
+    for(unsigned i=0;i<count&&removed<remove;i++)
+        if(unlinkat(dir,entries[i].name,0)==0)removed++;
+    if(removed)fsync(dir);
+    close(dir);
+    fprintf(stderr,"A5XELTE shader compiler: CACHE cleanup removed=%u retained=%u\n",
+        removed,total-removed);
+}
+
 static BOOL a5RetireSame(const struct stat *a,const struct stat *b){
  return a->st_dev==b->st_dev&&a->st_ino==b->st_ino&&a->st_uid==b->st_uid&&
   a->st_gid==b->st_gid&&a->st_mode==b->st_mode&&a->st_nlink==b->st_nlink&&a->st_size==b->st_size&&

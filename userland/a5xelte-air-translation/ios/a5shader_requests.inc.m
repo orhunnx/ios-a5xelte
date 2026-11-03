@@ -1251,6 +1251,7 @@ static void a5ScanRequests(NSString *self, NSArray<NSDictionary *> *knownProfile
     static unsigned scans;
     static NSString *maintenanceCursor;
     unsigned scan=++scans;
+    if((scan&127)==0)a5BoundedArchiveCleanup();
     BOOL report=scan<=8;
     __block unsigned usersSeen=0,usersRejected=0,candidates=0,readRejected=0,
         jsonRejected=0,identityRejected=0,digestRejected=0,handled=0,capped=0;
@@ -1395,6 +1396,7 @@ static void a5Serve(NSString *self)
 #ifdef A5_EMBEDDED_PUBLICATION
     a5InstallEmbeddedPublication();
 #endif
+    a5BoundedArchiveCleanup();
     serviceCheckpoint("serve-roots-end",nil,nil);
     NSMutableArray<NSDictionary *> *knownProfiles = [NSMutableArray array];
     serviceCheckpoint("stock-read-begin",nil,nil);

@@ -1134,3 +1134,9 @@ Stage the iPhone 8 Plus userland in an exact-size HFSX USERDATA image, select it
 - The retirement path was the dominant stall and SIGKILL source. Keeping it disabled is a workaround; the cache grows until a bounded/asynchronous retirement replaces it.
 - SpringBoard still SIGTRAPs; driverkitd remains. No kernel panic. [OPP record](docs/a5xelte-0251-gpu-opp.md).
 
+
+## 2026-11-03 — 0254 bounded retirement; 0255 800 MHz candidate built
+
+- 0254 disables the old retirement path and adds a bounded archive cleanup (retain 64, remove at most 32 per call, once per 128 scans). Worker SHA-256 `83be940e…`, BOOT `71b41010…`.
+- 800 MHz candidate from `clk-exynos7580-g3d.c`: PLL2551x m=400 p=13 s=0, MUX index0, divider 0x50, BUCK4 0x87. Candidate built; MIF/interconnect 825/400 votes are still missing; runtime pending. [Record](docs/a5xelte-0254-bounded-retirement.md).
+
